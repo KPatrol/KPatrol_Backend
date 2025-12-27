@@ -1,0 +1,75 @@
+# ========================================
+# KPatrol Backend - .gitignore
+# ========================================
+
+# ==================== Dependencies ====================
+node_modules/
+.pnpm-store/
+
+# ==================== Build ====================
+dist/
+build/
+*.tsbuildinfo
+
+# ==================== Environment ====================
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+!.env.example
+
+# ==================== IDE ====================
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-workspace
+
+# ==================== OS ====================
+.DS_Store
+Thumbs.db
+
+# ==================== Logs ====================
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+
+# ==================== Testing ====================
+coverage/
+.nyc_output/
+junit.xml
+
+# ==================== Prisma ====================
+prisma/migrations/*.sql
+prisma/*.db
+prisma/*.db-journal
+
+# ==================== Database ====================
+*.sqlite
+*.sqlite3
+*.db
+dump.rdb
+
+# ==================== Docker ====================
+.docker/
+
+# ==================== Cache ====================
+.cache/
+.turbo/
+.eslintcache
+
+# ==================== Secrets ====================
+*.pem
+*.key
+*.crt
+secrets/
+
+# ==================== Misc ====================
+*.tmp
+*.temp
+*.bak
