@@ -1,0 +1,136 @@
+// Prisma Schema for K-Patrol Backend
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== AUTH ====================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  robots    Robot[]
+  sessions  Session[]
+  alerts    Alert[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+// ==================== ROBOT ====================
+
+model Robot {
+  id          String      @id @default(cuid())
+  name        String
+  serialNumber String     @unique
+  status      RobotStatus @default(OFFLINE)
+  ownerId     String
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  owner       User        @relation(fields: [ownerId], references: [id])
+  telemetry   Telemetry[]
+  alerts      Alert[]
+  sessions    RobotSession[]
+}
+
+enum RobotStatus {
+  ONLINE
+  OFFLINE
+  CHARGING
+  ERROR
+}
+
+model RobotSession {
+  id        String   @id @default(cuid())
+  robotId   String
+  startTime DateTime @default(now())
+  endTime   DateTime?
+  distance  Float    @default(0) // meters traveled
+  
+  robot     Robot    @relation(fields: [robotId], references: [id])
+}
+
+// ==================== TELEMETRY ====================
+
+model Telemetry {
+  id          String   @id @default(cuid())
+  robotId     String
+  timestamp   DateTime @default(now())
+  
+  // Status
+  batteryLevel Float   // 0-100
+  temperature  Float   // Celsius
+  cpuUsage     Float   // 0-100
+  memoryUsage  Float   // 0-100
+  
+  // Position
+  positionX    Float?
+  positionY    Float?
+  heading      Float?  // degrees
+  
+  // Motors
+  speedM1      Float?
+  speedM2      Float?
+  speedM3      Float?
+  speedM4      Float?
+
+  robot       Robot    @relation(fields: [robotId], references: [id])
+
+  @@index([robotId, timestamp])
+}
+
+// ==================== ALERTS ====================
+
+model Alert {
+  id        String     @id @default(cuid())
+  robotId   String
+  userId    String
+  type      AlertType
+  message   String
+  severity  AlertSeverity @default(INFO)
+  read      Boolean    @default(false)
+  createdAt DateTime   @default(now())
+
+  robot     Robot      @relation(fields: [robotId], references: [id])
+  user      User       @relation(fields: [userId], references: [id])
+
+  @@index([userId, read])
+}
+
+enum AlertType {
+  MOTION_DETECTED
+  LOW_BATTERY
+  CONNECTION_LOST
+  OBSTACLE_DETECTED
+  SYSTEM_ERROR
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
