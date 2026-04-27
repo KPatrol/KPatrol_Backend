@@ -18,3 +18,4 @@
 - add robot-event DTOs v1
 - init robot-event module v1
 - add robot-event service v1
+- add robot-event controller v1
