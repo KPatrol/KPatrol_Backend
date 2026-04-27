@@ -28,3 +28,4 @@
 - add waypoint storage in robot service v2
 - expose waypoint endpoints v2
 - add validation for waypoint coords v3
+- add waypoint reorder support v4
