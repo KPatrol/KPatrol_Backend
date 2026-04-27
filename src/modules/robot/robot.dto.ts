@@ -1,24 +1,11 @@
-import { IsString, IsOptional, IsObject } from 'class-validator';
+import { IsString, IsOptional, IsObject, IsBoolean, IsNumber, Min, Max } from 'class-validator';
 
 export class CreateRobotDto {
   @IsString()
   name: string;
 
   @IsString()
-  @IsOptional()
-  serialNumber?: string;
-
-  @IsString()
-  @IsOptional()
-  model?: string;
-
-  @IsString()
-  @IsOptional()
-  firmwareVersion?: string;
-
-  @IsObject()
-  @IsOptional()
-  config?: Record<string, any>;
+  serialNumber: string;
 }
 
 export class UpdateRobotDto {
@@ -29,18 +16,40 @@ export class UpdateRobotDto {
   @IsString()
   @IsOptional()
   serialNumber?: string;
+}
+
+export class UpdateRobotConfigDto {
+  @IsBoolean()
+  @IsOptional()
+  safetyEnabled?: boolean;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(50)
+  @Max(500)
+  dangerDistance?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(100)
+  @Max(800)
+  cautionDistance?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(200)
+  @Max(1500)
+  slowDistance?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(50)
+  @Max(255)
+  defaultSpeed?: number;
 
   @IsString()
   @IsOptional()
-  model?: string;
-
-  @IsString()
-  @IsOptional()
-  firmwareVersion?: string;
-
-  @IsObject()
-  @IsOptional()
-  config?: Record<string, any>;
+  name?: string;
 }
 
 export class CreatePatrolDto {
