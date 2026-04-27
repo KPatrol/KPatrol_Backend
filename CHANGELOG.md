@@ -8,3 +8,4 @@
 - wire security middleware in main v2
 - register SecurityModule in app v2
 - add throttler and helmet deps v3
+- init maintenance module v1
