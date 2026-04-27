@@ -33,3 +33,4 @@
 - harden password hashing v2
 - add refresh-token endpoint v2
 - add rate limit to login v3
+- add session metadata to JWT v4
