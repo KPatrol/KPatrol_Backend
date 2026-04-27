@@ -1,43 +1,64 @@
-# Build stage
-FROM node:20-alpine AS builder
+# ============================================
+# K-PATROL BACKEND - DOCKER BUILD
+# ============================================
 
+# Build stage
+FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Install dependencies
-COPY package.json pnpm-lock.yaml* ./
-RUN npm install -g pnpm && pnpm install --frozen-lockfile
+# Install dependencies only when needed
+COPY package.json package-lock.json* pnpm-lock.yaml* ./
+RUN npm install -g pnpm && \
+    pnpm install --no-frozen-lockfile
 
-# Copy source code
+# Builder stage
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copy dependencies from deps stage
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Generate Prisma client
-RUN pnpm prisma generate
+RUN npx prisma generate
 
 # Build application
-RUN pnpm build
+RUN npm install -g pnpm && \
+    pnpm build
+
+# Remove dev dependencies
+RUN pnpm prune --prod
 
 # Production stage
 FROM node:20-alpine AS runner
-
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Install pnpm
-RUN npm install -g pnpm
-
-# Copy necessary files
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/prisma ./prisma
+# Install wget for healthcheck + openssl for Prisma on Alpine
+RUN apk add --no-cache wget openssl
 
 # Create non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nestjs
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nestjs
+
+# Copy necessary files from builder
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
+
+# Switch to non-root user
 USER nestjs
 
+# Expose port
 EXPOSE 4000
 
-# Start application
-CMD ["node", "dist/main.js"]
+ENV PORT=4000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:4000/api/health || exit 1
+
+# Start: sync DB schema (idempotent) then launch app
+CMD ["sh", "-c", "node_modules/.bin/prisma db push --skip-generate --accept-data-loss && node dist/main.js"]

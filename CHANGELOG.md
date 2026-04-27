@@ -35,3 +35,4 @@
 - add rate limit to login v3
 - add session metadata to JWT v4
 - polish auth error responses v5
+- tune Dockerfile production build v2
