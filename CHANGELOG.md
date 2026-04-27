@@ -19,3 +19,4 @@
 - init robot-event module v1
 - add robot-event service v1
 - add robot-event controller v1
+- extend robot-event filtering v2
