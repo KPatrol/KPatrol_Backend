@@ -25,3 +25,4 @@
 - polish robot-event payload v5
 - add waypoint DTO v1
 - extend robot DTO with patrol routes v2
+- add waypoint storage in robot service v2
