@@ -32,3 +32,4 @@
 - polish waypoint response v5
 - harden password hashing v2
 - add refresh-token endpoint v2
+- add rate limit to login v3
