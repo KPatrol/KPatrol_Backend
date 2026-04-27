@@ -39,3 +39,4 @@
 - add dockerignore to slim image v1
 - bump auth deps patch v6
 - extend socket gateway with rooms v2
+- add typed socket events catalog v3
