@@ -44,3 +44,4 @@
 - add Patrol and Event tables v2
 - add prisma migration for patrol v3
 - add unique index on event timestamp v4
+- polish prisma client config v5
