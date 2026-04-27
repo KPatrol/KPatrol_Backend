@@ -15,3 +15,4 @@
 - wire maintenance metrics into app v4
 - tune maintenance interval defaults v5
 - polish maintenance logging v6
+- add robot-event DTOs v1
