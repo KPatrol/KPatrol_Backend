@@ -21,3 +21,4 @@
 - add robot-event controller v1
 - extend robot-event filtering v2
 - add pagination to robot-event v3
+- add robot-event severity field v4
