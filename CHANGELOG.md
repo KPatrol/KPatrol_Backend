@@ -5,3 +5,4 @@
 - add csrf guard v1
 - add csrf controller v1
 - add user throttler guard v1
+- wire security middleware in main v2
