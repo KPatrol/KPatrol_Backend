@@ -42,3 +42,4 @@
 - add typed socket events catalog v3
 - add reconnect handshake on socket v4
 - add Patrol and Event tables v2
+- add prisma migration for patrol v3
