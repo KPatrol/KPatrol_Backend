@@ -31,3 +31,4 @@
 - add waypoint reorder support v4
 - polish waypoint response v5
 - harden password hashing v2
+- add refresh-token endpoint v2
