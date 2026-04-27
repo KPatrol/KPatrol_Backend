@@ -20,3 +20,4 @@
 - add robot-event service v1
 - add robot-event controller v1
 - extend robot-event filtering v2
+- add pagination to robot-event v3
