@@ -4,3 +4,4 @@
 - add security headers middleware v1
 - add csrf guard v1
 - add csrf controller v1
+- add user throttler guard v1
