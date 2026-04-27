@@ -40,3 +40,4 @@
 - bump auth deps patch v6
 - extend socket gateway with rooms v2
 - add typed socket events catalog v3
+- add reconnect handshake on socket v4
