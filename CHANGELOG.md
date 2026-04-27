@@ -29,3 +29,4 @@
 - expose waypoint endpoints v2
 - add validation for waypoint coords v3
 - add waypoint reorder support v4
+- polish waypoint response v5
