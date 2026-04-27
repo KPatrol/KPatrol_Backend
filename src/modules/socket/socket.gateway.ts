@@ -66,7 +66,7 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (!this.connectedClients.has(robotId)) {
         this.connectedClients.set(robotId, new Set());
       }
-      this.connectedClients.get(robotId).add(client);
+      this.connectedClients.get(robotId)!.add(client);
       client.data = { type: 'client', robotId, userId };
 
       // Send current robot state if available
