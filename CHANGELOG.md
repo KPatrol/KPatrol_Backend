@@ -36,3 +36,4 @@
 - add session metadata to JWT v4
 - polish auth error responses v5
 - tune Dockerfile production build v2
+- add dockerignore to slim image v1
