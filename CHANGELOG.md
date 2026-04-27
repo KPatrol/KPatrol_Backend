@@ -11,3 +11,4 @@
 - init maintenance module v1
 - add maintenance service v1
 - extend maintenance with diagnostics v2
+- add scheduled health audit hook v3
