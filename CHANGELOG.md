@@ -6,3 +6,4 @@
 - add csrf controller v1
 - add user throttler guard v1
 - wire security middleware in main v2
+- register SecurityModule in app v2
