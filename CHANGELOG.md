@@ -27,3 +27,4 @@
 - extend robot DTO with patrol routes v2
 - add waypoint storage in robot service v2
 - expose waypoint endpoints v2
+- add validation for waypoint coords v3
