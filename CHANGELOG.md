@@ -9,3 +9,4 @@
 - register SecurityModule in app v2
 - add throttler and helmet deps v3
 - init maintenance module v1
+- add maintenance service v1
