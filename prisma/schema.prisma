@@ -1,7 +1,9 @@
 // Prisma Schema for K-Patrol Backend
+// Updated: 2026-03 - V8 with RobotEvent, Notification, Patrol, PatrolLog
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
 }
 
 datasource db {
@@ -20,12 +22,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  robots    Robot[]
-  sessions  Session[]
-  alerts    Alert[]
+  robots        Robot[]
+  authSessions  AuthSession[]
+  notifications Notification[]
 }
 
-model Session {
+model AuthSession {
   id        String   @id @default(cuid())
   userId    String
   token     String   @unique
@@ -33,6 +35,8 @@ model Session {
   createdAt DateTime @default(now())
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])  // For expired session cleanup
 }
 
 enum Role {
@@ -43,18 +47,29 @@ enum Role {
 // ==================== ROBOT ====================
 
 model Robot {
-  id          String      @id @default(cuid())
-  name        String
-  serialNumber String     @unique
-  status      RobotStatus @default(OFFLINE)
-  ownerId     String
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id           String      @id @default(cuid())
+  name         String
+  serialNumber String      @unique
+  status       RobotStatus @default(OFFLINE)
+  userId       String
+  batteryLevel Float?
+  lastSeen     DateTime?
+  // V8: Safety thresholds stored per-robot
+  safetyEnabled        Boolean @default(true)
+  dangerDistance       Int     @default(150)
+  cautionDistance      Int     @default(250)
+  slowDistance         Int     @default(500)
+  // V8: Speed config
+  defaultSpeed         Int     @default(150)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
 
-  owner       User        @relation(fields: [ownerId], references: [id])
-  telemetry   Telemetry[]
-  alerts      Alert[]
-  sessions    RobotSession[]
+  user         User        @relation(fields: [userId], references: [id])
+  sessions     RobotSession[]
+  patrols      Patrol[]
+  alerts       Alert[]
+  events       RobotEvent[]
+  telemetry    Telemetry[]
 }
 
 enum RobotStatus {
@@ -65,60 +80,121 @@ enum RobotStatus {
 }
 
 model RobotSession {
+  id        String    @id @default(cuid())
+  robotId   String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  distance  Float     @default(0)
+
+  robot     Robot     @relation(fields: [robotId], references: [id])
+  logs      PatrolLog[]
+}
+
+// ==================== PATROL ====================
+
+model Patrol {
   id        String   @id @default(cuid())
   robotId   String
-  startTime DateTime @default(now())
-  endTime   DateTime?
-  distance  Float    @default(0) // meters traveled
-  
+  name      String
+  status    String   @default("PENDING")
+  routeData Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   robot     Robot    @relation(fields: [robotId], references: [id])
+  logs      PatrolLog[]
+}
+
+model PatrolLog {
+  id        String    @id @default(cuid())
+  patrolId  String?
+  sessionId String?
+  logType   String
+  message   String
+  data      Json?
+  createdAt DateTime  @default(now())
+
+  patrol    Patrol?      @relation(fields: [patrolId], references: [id])
+  session   RobotSession? @relation(fields: [sessionId], references: [id])
+}
+
+// ==================== ROBOT EVENTS (Activity History) ====================
+
+model RobotEvent {
+  id          String   @id @default(cuid())
+  robotId     String
+  // 'movement' | 'alert' | 'system' | 'patrol' | 'connection' | 'error'
+  eventType   String
+  title       String
+  description String
+  // 'info' | 'success' | 'warning' | 'error'
+  severity    String   @default("info")
+  data        Json?
+  createdAt   DateTime @default(now())
+
+  robot       Robot    @relation(fields: [robotId], references: [id])
+
+  @@index([robotId, createdAt])
+  @@index([robotId, eventType])
 }
 
 // ==================== TELEMETRY ====================
 
 model Telemetry {
-  id          String   @id @default(cuid())
-  robotId     String
-  timestamp   DateTime @default(now())
-  
-  // Status
-  batteryLevel Float   // 0-100
-  temperature  Float   // Celsius
-  cpuUsage     Float   // 0-100
-  memoryUsage  Float   // 0-100
-  
-  // Position
+  id           String   @id @default(cuid())
+  robotId      String
+  timestamp    DateTime @default(now())
+
+  batteryLevel Float?
+  temperature  Float?
+  cpuUsage     Float?
+  memoryUsage  Float?
+
   positionX    Float?
   positionY    Float?
-  heading      Float?  // degrees
-  
-  // Motors
+  heading      Float?
+
   speedM1      Float?
   speedM2      Float?
   speedM3      Float?
   speedM4      Float?
 
-  robot       Robot    @relation(fields: [robotId], references: [id])
+  // V8: ToF distances (mm)
+  tofFront       Float?
+  tofFrontLeft   Float?
+  tofFrontRight  Float?
+  tofLeft        Float?
+  tofRight       Float?
+  tofBack        Float?
+
+  // V8: IMU
+  imuYaw     Float?
+  imuPitch   Float?
+  imuRoll    Float?
+
+  robot        Robot    @relation(fields: [robotId], references: [id])
 
   @@index([robotId, timestamp])
+  @@index([timestamp])  // For cron cleanup by age
 }
 
 // ==================== ALERTS ====================
 
 model Alert {
-  id        String     @id @default(cuid())
-  robotId   String
-  userId    String
-  type      AlertType
-  message   String
-  severity  AlertSeverity @default(INFO)
-  read      Boolean    @default(false)
-  createdAt DateTime   @default(now())
+  id             String        @id @default(cuid())
+  robotId        String
+  type           AlertType
+  message        String
+  severity       AlertSeverity @default(INFO)
+  acknowledged   Boolean       @default(false)
+  acknowledgedAt DateTime?
+  data           Json?
+  createdAt      DateTime      @default(now())
 
-  robot     Robot      @relation(fields: [robotId], references: [id])
-  user      User       @relation(fields: [userId], references: [id])
+  robot          Robot         @relation(fields: [robotId], references: [id])
 
-  @@index([userId, read])
+  @@index([robotId, acknowledged])
+  @@index([acknowledged, createdAt])  // For cron cleanup of old acknowledged alerts
 }
 
 enum AlertType {
@@ -127,10 +203,31 @@ enum AlertType {
   CONNECTION_LOST
   OBSTACLE_DETECTED
   SYSTEM_ERROR
+  SAFETY_DANGER
+  SAFETY_CAUTION
+  IMU_ERROR
 }
 
 enum AlertSeverity {
   INFO
   WARNING
   CRITICAL
+}
+
+// ==================== NOTIFICATIONS ====================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String   @default("info")
+  read      Boolean  @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
 }
