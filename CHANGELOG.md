@@ -38,3 +38,4 @@
 - tune Dockerfile production build v2
 - add dockerignore to slim image v1
 - bump auth deps patch v6
+- extend socket gateway with rooms v2
