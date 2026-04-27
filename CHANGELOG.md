@@ -34,3 +34,4 @@
 - add refresh-token endpoint v2
 - add rate limit to login v3
 - add session metadata to JWT v4
+- polish auth error responses v5
