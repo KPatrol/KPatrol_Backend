@@ -22,3 +22,4 @@
 - extend robot-event filtering v2
 - add pagination to robot-event v3
 - add robot-event severity field v4
+- polish robot-event payload v5
