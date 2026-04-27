@@ -46,3 +46,4 @@
 - add unique index on event timestamp v4
 - polish prisma client config v5
 - bump nestjs and prisma deps v2
+- final integration polish v1

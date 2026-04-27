@@ -5,11 +5,21 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   
-  // CORS
+  // CORS — allow local dev + production subdomains
+  const corsOrigins = (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   app.enableCors({
     origin: [
-      'http://localhost:3000', // Mobile App
-      'http://localhost:3001', // Web Commerce
+      'http://localhost:3000',
+      'http://localhost:8001',
+      'http://localhost:3001',
+      'http://localhost:8002',
+      'https://kpatrol.khoavd.online',
+      'https://monitor.khoavd.online',
+      ...corsOrigins,
     ],
     credentials: true,
   });
@@ -18,6 +28,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true,
     transform: true,
+    transformOptions: { enableImplicitConversion: true },
   }));
 
   // Prefix
@@ -27,7 +38,7 @@ async function bootstrap() {
   await app.listen(port);
   
   console.log(`🚀 K-Patrol Backend running on http://localhost:${port}`);
-  console.log(`📡 WebSocket Gateway on ws://localhost:${port}`);
+  console.log(`📡 API prefix: /api`);
 }
 
 bootstrap();
