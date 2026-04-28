@@ -1,13 +1,31 @@
-# K-Patrol — Backend API
+<p align="center">
+  <img src="docs/logo.png" alt="K-Patrol" width="140" />
+</p>
 
-> NestJS API + Socket.io gateway for the K-Patrol indoor patrol robot platform.
-> API + WebSocket gateway phục vụ hệ sinh thái robot K-Patrol.
+<h1 align="center">K-Patrol — Backend API</h1>
 
-[![NestJS](https://img.shields.io/badge/NestJS-10.3-e0234e?logo=nestjs)](https://nestjs.com)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org)
-[![Prisma](https://img.shields.io/badge/Prisma-5.10-2d3748?logo=prisma)](https://www.prisma.io)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql)](https://www.postgresql.org)
-[![License](https://img.shields.io/badge/license-MIT-green)](#license)
+<p align="center">
+  <em>NestJS API + Socket.io gateway for the K-Patrol indoor patrol robot platform.</em><br/>
+  <em>API + WebSocket gateway phục vụ hệ sinh thái robot K-Patrol.</em>
+</p>
+
+<p align="center">
+  <a href="https://nestjs.com"><img alt="NestJS" src="https://img.shields.io/badge/NestJS-10.3-e0234e?logo=nestjs" /></a>
+  <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-blue?logo=typescript" /></a>
+  <a href="https://www.prisma.io"><img alt="Prisma" src="https://img.shields.io/badge/Prisma-5.10-2d3748?logo=prisma" /></a>
+  <a href="https://www.postgresql.org"><img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql" /></a>
+  <a href="#license"><img alt="License" src="https://img.shields.io/badge/license-MIT-green" /></a>
+  <a href="https://github.com/KPatrol/KPatrol_Backend"><img alt="Repo" src="https://img.shields.io/badge/repo-KPatrol_Backend-181717?logo=github" /></a>
+</p>
+
+<p align="center">
+  <a href="#overview--tổng-quan">Overview</a> ·
+  <a href="#modules">Modules</a> ·
+  <a href="#tech-stack">Tech Stack</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#deployment">Deployment</a> ·
+  <a href="#license">License</a>
+</p>
 
 ---
 
