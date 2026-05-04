@@ -9,8 +9,12 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Injectable, Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { RobotService } from '../robot/robot.service';
 import { RobotStatus } from '@prisma/client';
+import { getAllowedOrigins } from '../../config/cors.config';
+import { getRobotApiKey } from '../../config/auth.config';
+import { TokenBucketRateLimiter } from './rate-limiter';
 
 interface RobotState {
   position: { x: number; y: number; theta: number };
@@ -27,7 +31,8 @@ interface ControlCommand {
 
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: getAllowedOrigins(),
+    credentials: true,
   },
   namespace: '/robot',
 })
@@ -40,60 +45,166 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private connectedRobots = new Map<string, Socket>();
   private connectedClients = new Map<string, Set<Socket>>();
   private robotStates = new Map<string, RobotState>();
+  private controlLimiter = new TokenBucketRateLimiter({
+    capacity: 30,
+    refillPerSec: 15,
+  });
+  // Throttle "rate-limit hit" log lines so a misbehaving client cannot also
+  // spam the log file. Keyed by socket.id, value is last-warned timestamp.
+  private lastLimitLogMs = new Map<string, number>();
 
-  constructor(private robotService: RobotService) {}
+  constructor(
+    private robotService: RobotService,
+    private jwt: JwtService,
+  ) {}
 
   async handleConnection(client: Socket) {
-    const { type, robotId, userId } = client.handshake.query as {
+    const { type, robotId } = client.handshake.query as {
       type: 'robot' | 'client';
       robotId?: string;
-      userId?: string;
     };
 
-    this.logger.log(`Connection: ${type} - ${robotId || userId}`);
-
-    if (type === 'robot' && robotId) {
-      this.connectedRobots.set(robotId, client);
-      client.data = { type: 'robot', robotId };
-
-      // Update robot status
-      await this.robotService.updateStatus(robotId, RobotStatus.ONLINE);
-      await this.robotService.startSession(robotId);
-
-      // Notify clients
-      this.broadcastToClients(robotId, 'robot:connected', { robotId });
-    } else if (type === 'client' && robotId) {
-      if (!this.connectedClients.has(robotId)) {
-        this.connectedClients.set(robotId, new Set());
+    try {
+      // ----- AUTH GATE -----------------------------------------------------
+      // Anonymous handshakes were allowed in V8 — V10 requires every socket
+      // to identify itself before any room state is touched. We disconnect
+      // unauthenticated peers immediately so a malicious client cannot, for
+      // example, send `control:emergency` against an unrelated robot.
+      const authResult = this.authenticate(client, type, robotId);
+      if (!authResult.ok) {
+        this.logger.warn(
+          `auth rejected: type=${type} robot=${robotId} reason=${authResult.reason}`,
+        );
+        client.emit('auth:error', { message: authResult.reason });
+        client.disconnect(true);
+        return;
       }
-      this.connectedClients.get(robotId)!.add(client);
-      client.data = { type: 'client', robotId, userId };
+      const { userId } = authResult;
 
-      // Send current robot state if available
-      const state = this.robotStates.get(robotId);
-      if (state) {
-        client.emit('robot:state', state);
+      this.logger.log(
+        `Connection: ${type} - robot=${robotId} ${userId ? `user=${userId}` : ''}`,
+      );
+
+      if (type === 'robot' && robotId) {
+        this.connectedRobots.set(robotId, client);
+        client.data = { type: 'robot', robotId };
+
+        await this.robotService.updateStatus(robotId, RobotStatus.ONLINE);
+        await this.robotService.startSession(robotId);
+
+        this.broadcastToClients(robotId, 'robot:connected', { robotId });
+      } else if (type === 'client' && robotId) {
+        if (!this.connectedClients.has(robotId)) {
+          this.connectedClients.set(robotId, new Set());
+        }
+        this.connectedClients.get(robotId)!.add(client);
+        client.data = { type: 'client', robotId, userId };
+
+        const state = this.robotStates.get(robotId);
+        if (state) {
+          client.emit('robot:state', state);
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `handleConnection failed for ${type}=${robotId}: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+      client.emit('error', { message: 'Connection setup failed' });
+      client.disconnect(true);
+    }
+  }
+
+  /**
+   * Validate handshake credentials. Two flows:
+   *   - type=robot   → shared ROBOT_API_KEY (long-lived, env-rotated)
+   *   - type=client  → user JWT (same secret as REST auth)
+   *
+   * Token sources (checked in order): handshake.auth.token → query.token →
+   * Authorization: Bearer header. The auth field is preferred because it is
+   * not logged by reverse proxies.
+   */
+  private authenticate(
+    client: Socket,
+    type: string | undefined,
+    robotId: string | undefined,
+  ):
+    | { ok: true; userId?: string }
+    | { ok: false; reason: string } {
+    if (!robotId) return { ok: false, reason: 'missing robotId' };
+
+    const auth = (client.handshake.auth ?? {}) as Record<string, unknown>;
+    const query = client.handshake.query as Record<string, string | string[]>;
+    const headerAuth =
+      (client.handshake.headers['authorization'] as string | undefined) ?? '';
+    const bearer = headerAuth.startsWith('Bearer ')
+      ? headerAuth.slice('Bearer '.length)
+      : '';
+    const token =
+      (typeof auth.token === 'string' && auth.token) ||
+      (typeof query.token === 'string' && query.token) ||
+      bearer ||
+      '';
+
+    if (type === 'robot') {
+      const expected = getRobotApiKey();
+      const provided =
+        (typeof auth.apiKey === 'string' && auth.apiKey) ||
+        (typeof query.apiKey === 'string' && query.apiKey) ||
+        token;
+      if (!provided || provided !== expected) {
+        return { ok: false, reason: 'invalid robot api key' };
+      }
+      return { ok: true };
+    }
+
+    if (type === 'client') {
+      if (!token) return { ok: false, reason: 'missing token' };
+      try {
+        const payload = this.jwt.verify<{ sub: string }>(token);
+        if (!payload?.sub) {
+          return { ok: false, reason: 'token missing subject' };
+        }
+        return { ok: true, userId: payload.sub };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `invalid token (${(err as Error).message})`,
+        };
       }
     }
+
+    return { ok: false, reason: `unknown type "${type}"` };
   }
 
   async handleDisconnect(client: Socket) {
     const { type, robotId } = client.data || {};
 
-    if (type === 'robot' && robotId) {
-      this.connectedRobots.delete(robotId);
-      this.robotStates.delete(robotId);
+    try {
+      if (type === 'robot' && robotId) {
+        this.connectedRobots.delete(robotId);
+        this.robotStates.delete(robotId);
 
-      // Update robot status
-      await this.robotService.updateStatus(robotId, RobotStatus.OFFLINE);
+        // Update robot status
+        await this.robotService.updateStatus(robotId, RobotStatus.OFFLINE);
 
-      // Notify clients
-      this.broadcastToClients(robotId, 'robot:disconnected', { robotId });
+        // Notify clients
+        this.broadcastToClients(robotId, 'robot:disconnected', { robotId });
 
-      this.logger.log(`Robot disconnected: ${robotId}`);
-    } else if (type === 'client' && robotId) {
-      this.connectedClients.get(robotId)?.delete(client);
-      this.logger.log(`Client disconnected from robot: ${robotId}`);
+        this.logger.log(`Robot disconnected: ${robotId}`);
+      } else if (type === 'client' && robotId) {
+        this.connectedClients.get(robotId)?.delete(client);
+        this.logger.log(`Client disconnected from robot: ${robotId}`);
+      }
+      // Always release limiter state — applies to robots and unknown types
+      // too, so a flood of failed handshakes can't grow the map unbounded.
+      this.controlLimiter.release(client.id);
+      this.lastLimitLogMs.delete(client.id);
+    } catch (err) {
+      this.logger.error(
+        `handleDisconnect failed for ${type}=${robotId}: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
     }
   }
 
@@ -109,9 +220,17 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     this.robotStates.set(robotId, state);
 
-    // Update battery level in database
-    if (state.batteryLevel !== undefined) {
-      await this.robotService.updateBatteryLevel(robotId, state.batteryLevel);
+    try {
+      // Update battery level in database
+      if (state.batteryLevel !== undefined) {
+        await this.robotService.updateBatteryLevel(robotId, state.batteryLevel);
+      }
+    } catch (err) {
+      this.logger.error(
+        `handleRobotState DB update failed for ${robotId}: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+      // Continue: in-memory state already updated, broadcast still useful
     }
 
     // Broadcast to all connected clients
@@ -137,17 +256,26 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const { robotId } = client.data || {};
     if (!robotId) return;
 
-    // Save alert to database
-    const savedAlert = await this.robotService.createAlert(
-      robotId,
-      alert.type,
-      alert.severity,
-      alert.message,
-      alert.data,
-    );
+    try {
+      // Save alert to database
+      const savedAlert = await this.robotService.createAlert(
+        robotId,
+        alert.type,
+        alert.severity,
+        alert.message,
+        alert.data,
+      );
 
-    // Broadcast to clients
-    this.broadcastToClients(robotId, 'robot:alert', savedAlert);
+      // Broadcast to clients
+      this.broadcastToClients(robotId, 'robot:alert', savedAlert);
+    } catch (err) {
+      this.logger.error(
+        `handleRobotAlert failed for ${robotId} (${alert.type}): ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+      // Fall back to broadcasting unsaved alert so operators still see it
+      this.broadcastToClients(robotId, 'robot:alert', { ...alert, robotId, persisted: false });
+    }
   }
 
   @SubscribeMessage('robot:camera')
@@ -167,36 +295,72 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() log: { patrolId: string; logType: string; message: string; data?: any },
   ) {
-    const savedLog = await this.robotService.addPatrolLog(
-      log.patrolId,
-      log.logType,
-      log.message,
-      log.data,
-    );
-
     const { robotId } = client.data || {};
-    if (robotId) {
-      this.broadcastToClients(robotId, 'robot:patrol:log', savedLog);
+    try {
+      const savedLog = await this.robotService.addPatrolLog(
+        log.patrolId,
+        log.logType,
+        log.message,
+        log.data,
+      );
+
+      if (robotId) {
+        this.broadcastToClients(robotId, 'robot:patrol:log', savedLog);
+      }
+    } catch (err) {
+      this.logger.error(
+        `handlePatrolLog failed for patrol=${log.patrolId} robot=${robotId}: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
     }
   }
 
   // ==================== Client Commands ====================
+
+  /**
+   * Gate a control:* event through the per-socket token bucket. Returns the
+   * robotId+robotSocket if the call should proceed, or null if it was either
+   * unauthorised or rate-limited (in which case the caller has already been
+   * notified).
+   */
+  private gateControl(
+    client: Socket,
+    eventName: string,
+  ): { robotId: string; robotSocket: Socket } | null {
+    const { type, robotId } = client.data || {};
+    if (type !== 'client' || !robotId) {
+      // Robots must not loopback control:* — only authenticated clients.
+      return null;
+    }
+    if (!this.controlLimiter.tryAcquire(client.id)) {
+      const now = Date.now();
+      const last = this.lastLimitLogMs.get(client.id) ?? 0;
+      if (now - last > 2000) {
+        this.lastLimitLogMs.set(client.id, now);
+        this.logger.warn(
+          `rate-limit dropped event=${eventName} socket=${client.id} robot=${robotId}`,
+        );
+      }
+      client.emit('control:throttled', { event: eventName });
+      return null;
+    }
+    const robotSocket = this.connectedRobots.get(robotId);
+    if (!robotSocket) {
+      client.emit('error', { message: 'Robot is not connected' });
+      return null;
+    }
+    return { robotId, robotSocket };
+  }
 
   @SubscribeMessage('control:command')
   handleControlCommand(
     @ConnectedSocket() client: Socket,
     @MessageBody() command: ControlCommand,
   ) {
-    const { robotId } = client.data || {};
-    if (!robotId) return;
-
-    const robotSocket = this.connectedRobots.get(robotId);
-    if (robotSocket) {
-      robotSocket.emit('control:command', command);
-      this.logger.log(`Command sent to robot ${robotId}: ${command.type}`);
-    } else {
-      client.emit('error', { message: 'Robot is not connected' });
-    }
+    const gate = this.gateControl(client, 'control:command');
+    if (!gate) return;
+    gate.robotSocket.emit('control:command', command);
+    this.logger.log(`Command sent to robot ${gate.robotId}: ${command.type}`);
   }
 
   @SubscribeMessage('control:move')
@@ -204,13 +368,9 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() move: { linear: number; angular: number },
   ) {
-    const { robotId } = client.data || {};
-    if (!robotId) return;
-
-    const robotSocket = this.connectedRobots.get(robotId);
-    if (robotSocket) {
-      robotSocket.emit('control:move', move);
-    }
+    const gate = this.gateControl(client, 'control:move');
+    if (!gate) return;
+    gate.robotSocket.emit('control:move', move);
   }
 
   @SubscribeMessage('control:mecanum')
@@ -218,13 +378,9 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() mecanum: { vx: number; vy: number; omega: number },
   ) {
-    const { robotId } = client.data || {};
-    if (!robotId) return;
-
-    const robotSocket = this.connectedRobots.get(robotId);
-    if (robotSocket) {
-      robotSocket.emit('control:mecanum', mecanum);
-    }
+    const gate = this.gateControl(client, 'control:mecanum');
+    if (!gate) return;
+    gate.robotSocket.emit('control:mecanum', mecanum);
   }
 
   @SubscribeMessage('control:motor')
@@ -232,20 +388,17 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() motor: { motorId: number; speed: number; direction: 'forward' | 'backward' | 'stop' },
   ) {
-    const { robotId } = client.data || {};
-    if (!robotId) return;
-
-    const robotSocket = this.connectedRobots.get(robotId);
-    if (robotSocket) {
-      robotSocket.emit('control:motor', motor);
-    }
+    const gate = this.gateControl(client, 'control:motor');
+    if (!gate) return;
+    gate.robotSocket.emit('control:motor', motor);
   }
 
+  // Emergency stop bypasses the rate limiter — a panic button must NEVER be
+  // throttled. Auth still required (handshake check + client type guard).
   @SubscribeMessage('control:emergency')
   handleEmergencyStop(@ConnectedSocket() client: Socket) {
-    const { robotId } = client.data || {};
-    if (!robotId) return;
-
+    const { type, robotId } = client.data || {};
+    if (type !== 'client' || !robotId) return;
     const robotSocket = this.connectedRobots.get(robotId);
     if (robotSocket) {
       robotSocket.emit('control:emergency');
