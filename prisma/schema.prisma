@@ -64,7 +64,9 @@ model Robot {
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
-  user         User        @relation(fields: [userId], references: [id])
+  // Restrict: deleting a user must not silently destroy owned robots —
+  // transfer ownership first.
+  user         User        @relation(fields: [userId], references: [id], onDelete: Restrict)
   sessions     RobotSession[]
   patrols      Patrol[]
   alerts       Alert[]
@@ -86,7 +88,7 @@ model RobotSession {
   endedAt   DateTime?
   distance  Float     @default(0)
 
-  robot     Robot     @relation(fields: [robotId], references: [id])
+  robot     Robot     @relation(fields: [robotId], references: [id], onDelete: Cascade)
   logs      PatrolLog[]
 }
 
@@ -101,7 +103,7 @@ model Patrol {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  robot     Robot    @relation(fields: [robotId], references: [id])
+  robot     Robot    @relation(fields: [robotId], references: [id], onDelete: Cascade)
   logs      PatrolLog[]
 }
 
@@ -114,8 +116,8 @@ model PatrolLog {
   data      Json?
   createdAt DateTime  @default(now())
 
-  patrol    Patrol?      @relation(fields: [patrolId], references: [id])
-  session   RobotSession? @relation(fields: [sessionId], references: [id])
+  patrol    Patrol?       @relation(fields: [patrolId], references: [id], onDelete: Cascade)
+  session   RobotSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 }
 
 // ==================== ROBOT EVENTS (Activity History) ====================
@@ -132,7 +134,7 @@ model RobotEvent {
   data        Json?
   createdAt   DateTime @default(now())
 
-  robot       Robot    @relation(fields: [robotId], references: [id])
+  robot       Robot    @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
   @@index([robotId, createdAt])
   @@index([robotId, eventType])
@@ -172,7 +174,7 @@ model Telemetry {
   imuPitch   Float?
   imuRoll    Float?
 
-  robot        Robot    @relation(fields: [robotId], references: [id])
+  robot        Robot    @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
   @@index([robotId, timestamp])
   @@index([timestamp])  // For cron cleanup by age
@@ -191,7 +193,7 @@ model Alert {
   data           Json?
   createdAt      DateTime      @default(now())
 
-  robot          Robot         @relation(fields: [robotId], references: [id])
+  robot          Robot         @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
   @@index([robotId, acknowledged])
   @@index([acknowledged, createdAt])  // For cron cleanup of old acknowledged alerts
