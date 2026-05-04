@@ -1,10 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NotificationService } from '../notification/notification.service';
 
 @Injectable()
 export class RobotEventService {
-  constructor(private prisma: PrismaService) {}
+  private readonly log = new Logger(RobotEventService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private notifications: NotificationService,
+  ) {}
 
   /**
    * Find robot by serial, OR auto-create it with a system user.
@@ -52,7 +58,7 @@ export class RobotEventService {
   ) {
     const robot = await this.findRobotBySerial(robotSerial);
 
-    return this.prisma.robotEvent.create({
+    const event = await this.prisma.robotEvent.create({
       data: {
         robotId: robot.id,
         eventType,
@@ -62,6 +68,50 @@ export class RobotEventService {
         data: data ?? undefined,
       },
     });
+
+    // Fan-out to email/Zalo channels for high-severity safety events. We
+    // dispatch async (no await) so the HTTP/MQTT caller isn't blocked on SMTP.
+    // Owner of the robot is the recipient; notifyAlert also broadcasts to the
+    // admin list defined in ALERT_RECIPIENTS_*.
+    void this.maybeFanOut(robot.userId, robot.name, eventType, title, description, severity, data);
+
+    return event;
+  }
+
+  private async maybeFanOut(
+    userId: string,
+    robotName: string,
+    eventType: string,
+    title: string,
+    description: string,
+    severity: string,
+    data?: any,
+  ) {
+    try {
+      // Fan-out rules:
+      //   - Always notify on severity 'alert' or 'error' (any eventType).
+      //   - Notify on severity 'warning' only when the event is safety- or
+      //     security-related (eventType 'safety' or 'alert'). This keeps low-
+      //     confidence motion blips (severity='info', eventType='alert') and
+      //     transient battery warnings outside the email/Zalo channel — they
+      //     still land in the in-app inbox via the DB record above.
+      const isHigh = severity === 'alert' || severity === 'error';
+      const isSecurityWarning =
+        severity === 'warning' && (eventType === 'safety' || eventType === 'alert');
+      if (isHigh || isSecurityWarning) {
+        await this.notifications.notifyAlert(userId, title, description);
+      }
+
+      // Battery events: trigger low-battery notification when payload carries a
+      // numeric level under 20%. The mobile MQTTProvider posts these from the
+      // T.BATTERY topic; firmware also emits them on critical thresholds.
+      const level = extractBatteryLevel(data);
+      if (level !== null && level < 20) {
+        await this.notifications.notifyLowBattery(userId, robotName, level);
+      }
+    } catch (err) {
+      this.log.warn(`fan-out failed for "${title}": ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -137,4 +187,11 @@ export class RobotEventService {
       where: { id, robotId: robot.id },
     });
   }
+}
+
+function extractBatteryLevel(data: any): number | null {
+  if (!data || typeof data !== 'object') return null;
+  const raw = data.battery ?? data.level ?? data.batteryLevel ?? data.percent;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  return null;
 }
