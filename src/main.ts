@@ -1,26 +1,13 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { getAllowedOrigins } from './config/cors.config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
-  // CORS — allow local dev + production subdomains
-  const corsOrigins = (process.env.CORS_ORIGINS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
 
   app.enableCors({
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:8001',
-      'http://localhost:3001',
-      'http://localhost:8002',
-      'https://kpatrol.khoavd.online',
-      'https://monitor.khoavd.online',
-      ...corsOrigins,
-    ],
+    origin: getAllowedOrigins(),
     credentials: true,
   });
 
