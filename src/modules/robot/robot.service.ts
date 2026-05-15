@@ -137,7 +137,8 @@ export class RobotService {
   }
 
   // Patrol management
-  async createPatrol(robotId: string, name: string, routeData?: any) {
+  async createPatrol(robotId: string, userId: string, name: string, routeData?: any) {
+    await this.findOne(robotId, userId); // Check ownership
     return this.prisma.patrol.create({
       data: {
         robotId,
@@ -160,11 +161,23 @@ export class RobotService {
     });
   }
 
-  async deletePatrol(patrolId: string) {
+  private async assertPatrolOwnership(robotId: string, patrolId: string, userId: string) {
+    await this.findOne(robotId, userId); // verifies robot belongs to user
+    const patrol = await this.prisma.patrol.findUnique({ where: { id: patrolId } });
+    if (!patrol) throw new NotFoundException('Patrol not found');
+    if (patrol.robotId !== robotId) {
+      throw new ForbiddenException('Patrol does not belong to this robot');
+    }
+    return patrol;
+  }
+
+  async deletePatrol(robotId: string, patrolId: string, userId: string) {
+    await this.assertPatrolOwnership(robotId, patrolId, userId);
     return this.prisma.patrol.delete({ where: { id: patrolId } });
   }
 
-  async updatePatrolStatus(patrolId: string, status: string) {
+  async updatePatrolStatus(robotId: string, patrolId: string, userId: string, status: string) {
+    await this.assertPatrolOwnership(robotId, patrolId, userId);
     return this.prisma.patrol.update({
       where: { id: patrolId },
       data: { status },
@@ -182,6 +195,33 @@ export class RobotService {
     });
   }
 
+  /**
+   * Lightweight ownership check used by the socket gateway at handshake time.
+   * Avoids the heavy joins that `findOne` pulls in; only selects userId.
+   * Throws ForbiddenException (or NotFoundException) on mismatch.
+   */
+  async assertOwnership(robotId: string, userId: string): Promise<void> {
+    const robot = await this.prisma.robot.findUnique({
+      where: { id: robotId },
+      select: { userId: true },
+    });
+    if (!robot) throw new NotFoundException('Robot not found');
+    if (robot.userId !== userId) throw new ForbiddenException('Access denied');
+  }
+
+  /**
+   * Check whether the patrol belongs to the given robot. Used by the socket
+   * gateway to reject `robot:patrol:log` events that try to write logs to
+   * patrols owned by another robot (spoofed patrolId protection).
+   */
+  async patrolBelongsToRobot(patrolId: string, robotId: string): Promise<boolean> {
+    const patrol = await this.prisma.patrol.findUnique({
+      where: { id: patrolId },
+      select: { robotId: true },
+    });
+    return patrol?.robotId === robotId;
+  }
+
   // Alert management
   async createAlert(robotId: string, type: string, severity: string, message: string, data?: any) {
     return this.prisma.alert.create({
@@ -195,7 +235,15 @@ export class RobotService {
     });
   }
 
-  async acknowledgeAlert(alertId: string) {
+  async acknowledgeAlert(alertId: string, userId: string) {
+    const alert = await this.prisma.alert.findUnique({
+      where: { id: alertId },
+      include: { robot: { select: { userId: true } } },
+    });
+    if (!alert) throw new NotFoundException('Alert not found');
+    if (alert.robot.userId !== userId) {
+      throw new ForbiddenException('Access denied');
+    }
     return this.prisma.alert.update({
       where: { id: alertId },
       data: {
@@ -205,7 +253,8 @@ export class RobotService {
     });
   }
 
-  async getActiveAlerts(robotId: string) {
+  async getActiveAlerts(robotId: string, userId: string) {
+    await this.findOne(robotId, userId); // Check ownership
     return this.prisma.alert.findMany({
       where: {
         robotId,
@@ -259,6 +308,7 @@ export class RobotService {
       where: { id },
       select: {
         id: true,
+        userId: true,
         name: true,
         serialNumber: true,
         safetyEnabled: true,
@@ -272,7 +322,8 @@ export class RobotService {
       },
     });
     if (!robot) throw new NotFoundException('Robot not found');
-    if ((robot as any).userId !== userId) throw new ForbiddenException('Access denied');
-    return robot;
+    if (robot.userId !== userId) throw new ForbiddenException('Access denied');
+    const { userId: _ownerId, ...safe } = robot;
+    return safe;
   }
 }

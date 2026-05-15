@@ -1,5 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
 
@@ -13,36 +12,20 @@ export class RobotEventService {
   ) {}
 
   /**
-   * Find robot by serial, OR auto-create it with a system user.
-   * This allows the frontend to log events without prior robot registration.
+   * Resolve robot by serial AND verify the caller owns it. Replaces the
+   * previous auto-provisioning path which was reachable from a public
+   * endpoint and let any caller create rows under a shared `system@kpatrol.local`
+   * admin user. After the 2026-05-15 lockdown, robot rows must already exist
+   * (created via the authenticated /robots POST endpoint) and the JWT subject
+   * must match `Robot.userId`.
    */
-  private async findRobotBySerial(serialNumber: string) {
-    const existing = await this.prisma.robot.findUnique({ where: { serialNumber } });
-    if (existing) return existing;
-
-    // Auto-provision: ensure a system user exists
-    const systemEmail = 'system@kpatrol.local';
-    let systemUser = await this.prisma.user.findUnique({ where: { email: systemEmail } });
-    if (!systemUser) {
-      systemUser = await this.prisma.user.create({
-        data: {
-          email: systemEmail,
-          password: await bcrypt.hash('kpatrol-system-internal', 10),
-          name: 'K-Patrol System',
-          role: 'ADMIN',
-        },
-      });
+  private async resolveOwnedRobot(serialNumber: string, userId: string) {
+    const robot = await this.prisma.robot.findUnique({ where: { serialNumber } });
+    if (!robot) throw new NotFoundException(`Robot ${serialNumber} not found`);
+    if (robot.userId !== userId) {
+      throw new ForbiddenException('Access denied');
     }
-
-    // Auto-create the robot
-    return this.prisma.robot.create({
-      data: {
-        serialNumber,
-        name: serialNumber,
-        userId: systemUser.id,
-        status: 'ONLINE',
-      },
-    });
+    return robot;
   }
 
   /**
@@ -50,13 +33,14 @@ export class RobotEventService {
    */
   async createEvent(
     robotSerial: string,
+    userId: string,
     eventType: string,
     title: string,
     description: string,
     severity: string = 'info',
     data?: any,
   ) {
-    const robot = await this.findRobotBySerial(robotSerial);
+    const robot = await this.resolveOwnedRobot(robotSerial, userId);
 
     const event = await this.prisma.robotEvent.create({
       data: {
@@ -119,11 +103,12 @@ export class RobotEventService {
    */
   async getEvents(
     robotSerial: string,
+    userId: string,
     eventType?: string,
     page: number = 1,
     limit: number = 50,
   ) {
-    const robot = await this.findRobotBySerial(robotSerial);
+    const robot = await this.resolveOwnedRobot(robotSerial, userId);
     const skip = (page - 1) * limit;
 
     const where: any = { robotId: robot.id };
@@ -153,8 +138,8 @@ export class RobotEventService {
   /**
    * Get event stats by serial number
    */
-  async getStats(robotSerial: string) {
-    const robot = await this.findRobotBySerial(robotSerial);
+  async getStats(robotSerial: string, userId: string) {
+    const robot = await this.resolveOwnedRobot(robotSerial, userId);
 
     const [total, movements, alerts, patrols, errors, connections] = await Promise.all([
       this.prisma.robotEvent.count({ where: { robotId: robot.id } }),
@@ -171,8 +156,8 @@ export class RobotEventService {
   /**
    * Clear all events for a robot
    */
-  async clearEvents(robotSerial: string) {
-    const robot = await this.findRobotBySerial(robotSerial);
+  async clearEvents(robotSerial: string, userId: string) {
+    const robot = await this.resolveOwnedRobot(robotSerial, userId);
     return this.prisma.robotEvent.deleteMany({
       where: { robotId: robot.id },
     });
@@ -181,8 +166,8 @@ export class RobotEventService {
   /**
    * Delete a single event
    */
-  async deleteEvent(id: string, robotSerial: string) {
-    const robot = await this.findRobotBySerial(robotSerial);
+  async deleteEvent(id: string, robotSerial: string, userId: string) {
+    const robot = await this.resolveOwnedRobot(robotSerial, userId);
     return this.prisma.robotEvent.deleteMany({
       where: { id, robotId: robot.id },
     });
