@@ -191,12 +191,30 @@ model Alert {
   acknowledged   Boolean       @default(false)
   acknowledgedAt DateTime?
   data           Json?
+  // V10: detection-specific fields persisted from MQTT ingest. Confidence and
+  // bbox are denormalised out of `data` so admin queries (e.g. "average
+  // confidence of fire alerts last week") don't have to JSON-parse every row.
+  confidence     Float?
+  bboxX          Int?
+  bboxY          Int?
+  bboxW          Int?
+  bboxH          Int?
+  frameWidth     Int?
+  frameHeight    Int?
+  // Base64 JPEG snapshot. Stored inline so the web admin can render the alert
+  // without a follow-up fetch; ~6–10 KB per row at 320 px / q70 — acceptable.
+  snapshotB64    String?
+  // External alert id from the robot's local SQLite WAL, used to deduplicate
+  // re-publishes when the drainer retries after broker reconnects.
+  externalId     Int?
   createdAt      DateTime      @default(now())
 
   robot          Robot         @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
+  @@unique([robotId, externalId])
   @@index([robotId, acknowledged])
   @@index([acknowledged, createdAt])  // For cron cleanup of old acknowledged alerts
+  @@index([robotId, type, createdAt])  // Web admin filters by alert type per robot
 }
 
 enum AlertType {
@@ -208,6 +226,9 @@ enum AlertType {
   SAFETY_DANGER
   SAFETY_CAUTION
   IMU_ERROR
+  // V10: emitted by AnomalyDetector → alert_bridge → MQTT → MqttIngestService.
+  PERSON_DETECTED
+  FIRE_DETECTED
 }
 
 enum AlertSeverity {
