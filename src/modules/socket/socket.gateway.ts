@@ -81,6 +81,22 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       const { userId } = authResult;
 
+      // Authenticated clients must own the robot they're subscribing to.
+      // Robots (API-key auth) are trusted operators of their own serial and
+      // skip this DB check — abuse there would require leaking ROBOT_API_KEY.
+      if (type === 'client' && userId && robotId) {
+        try {
+          await this.robotService.assertOwnership(robotId, userId);
+        } catch (err) {
+          this.logger.warn(
+            `auth rejected: user=${userId} not owner of robot=${robotId} (${(err as Error).message})`,
+          );
+          client.emit('auth:error', { message: 'access denied' });
+          client.disconnect(true);
+          return;
+        }
+      }
+
       this.logger.log(
         `Connection: ${type} - robot=${robotId} ${userId ? `user=${userId}` : ''}`,
       );
@@ -295,18 +311,25 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() log: { patrolId: string; logType: string; message: string; data?: any },
   ) {
-    const { robotId } = client.data || {};
+    const { type, robotId } = client.data || {};
+    if (type !== 'robot' || !robotId) return; // only authenticated robots
+    if (!log || typeof log.patrolId !== 'string' || typeof log.logType !== 'string') return;
     try {
+      // Reject patrolId spoofing — robot may only log against its own patrols.
+      const owned = await this.robotService.patrolBelongsToRobot(log.patrolId, robotId);
+      if (!owned) {
+        this.logger.warn(
+          `handlePatrolLog rejected: patrol=${log.patrolId} does not belong to robot=${robotId}`,
+        );
+        return;
+      }
       const savedLog = await this.robotService.addPatrolLog(
         log.patrolId,
         log.logType,
         log.message,
         log.data,
       );
-
-      if (robotId) {
-        this.broadcastToClients(robotId, 'robot:patrol:log', savedLog);
-      }
+      this.broadcastToClients(robotId, 'robot:patrol:log', savedLog);
     } catch (err) {
       this.logger.error(
         `handlePatrolLog failed for patrol=${log.patrolId} robot=${robotId}: ${(err as Error).message}`,
@@ -411,24 +434,20 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() patrol: { patrolId: string },
   ) {
-    const { robotId } = client.data || {};
-    if (!robotId) return;
-
-    const robotSocket = this.connectedRobots.get(robotId);
-    if (robotSocket) {
-      robotSocket.emit('patrol:start', patrol);
+    const gate = this.gateControl(client, 'patrol:start');
+    if (!gate) return;
+    if (!patrol || typeof patrol.patrolId !== 'string') {
+      client.emit('error', { message: 'patrolId required' });
+      return;
     }
+    gate.robotSocket.emit('patrol:start', patrol);
   }
 
   @SubscribeMessage('patrol:stop')
   handlePatrolStop(@ConnectedSocket() client: Socket) {
-    const { robotId } = client.data || {};
-    if (!robotId) return;
-
-    const robotSocket = this.connectedRobots.get(robotId);
-    if (robotSocket) {
-      robotSocket.emit('patrol:stop');
-    }
+    const gate = this.gateControl(client, 'patrol:stop');
+    if (!gate) return;
+    gate.robotSocket.emit('patrol:stop');
   }
 
   // ==================== Utility Methods ====================
