@@ -6,17 +6,21 @@ import {
   Body,
   Query,
   Param,
+  Request,
+  UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RobotEventService } from './robot-event.service';
 import { CreateRobotEventDto } from './robot-event.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 /**
- * RobotEvent Controller — PUBLIC endpoint (no JWT required)
- * Authentication: robot serial number passed in request body/query
- * Rate limited: 30 writes/min, 120 reads/min per IP
+ * RobotEvent Controller — requires JWT (locked down 2026-05-15).
+ * Caller must own the robot identified by `robotSerial` (verified inside
+ * the service via Robot.userId). Rate-limited at 30 writes/min, 120 reads/min.
  */
 @Controller('robot-events')
+@UseGuards(JwtAuthGuard)
 export class RobotEventController {
   constructor(private robotEventService: RobotEventService) {}
 
@@ -26,9 +30,10 @@ export class RobotEventController {
    */
   @Post()
   @Throttle({ default: { limit: 30, ttl: 60000 } })
-  create(@Body() dto: CreateRobotEventDto) {
+  create(@Request() req, @Body() dto: CreateRobotEventDto) {
     return this.robotEventService.createEvent(
       dto.robotSerial,
+      req.user.id,
       dto.eventType,
       dto.title,
       dto.description,
@@ -43,6 +48,7 @@ export class RobotEventController {
    */
   @Get()
   getEvents(
+    @Request() req,
     @Query('robotSerial') robotSerial: string,
     @Query('eventType') eventType?: string,
     @Query('page') page: string = '1',
@@ -50,6 +56,7 @@ export class RobotEventController {
   ) {
     return this.robotEventService.getEvents(
       robotSerial,
+      req.user.id,
       eventType,
       parseInt(page, 10),
       parseInt(limit, 10),
@@ -61,8 +68,8 @@ export class RobotEventController {
    * Get event count statistics
    */
   @Get('stats')
-  getStats(@Query('robotSerial') robotSerial: string) {
-    return this.robotEventService.getStats(robotSerial);
+  getStats(@Request() req, @Query('robotSerial') robotSerial: string) {
+    return this.robotEventService.getStats(robotSerial, req.user.id);
   }
 
   /**
@@ -70,8 +77,8 @@ export class RobotEventController {
    * Clear all events for a robot
    */
   @Delete()
-  clearAll(@Query('robotSerial') robotSerial: string) {
-    return this.robotEventService.clearEvents(robotSerial);
+  clearAll(@Request() req, @Query('robotSerial') robotSerial: string) {
+    return this.robotEventService.clearEvents(robotSerial, req.user.id);
   }
 
   /**
@@ -80,9 +87,10 @@ export class RobotEventController {
    */
   @Delete(':id')
   deleteOne(
+    @Request() req,
     @Param('id') id: string,
     @Query('robotSerial') robotSerial: string,
   ) {
-    return this.robotEventService.deleteEvent(id, robotSerial);
+    return this.robotEventService.deleteEvent(id, robotSerial, req.user.id);
   }
 }
