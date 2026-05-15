@@ -101,21 +101,22 @@ export class RobotController {
   }
 
   @Get(':id/alerts')
-  getAlerts(@Param('id') id: string) {
-    return this.robotService.getActiveAlerts(id);
+  getAlerts(@Request() req, @Param('id') id: string) {
+    return this.robotService.getActiveAlerts(id, req.user.id);
   }
 
   @Put('alerts/:alertId/acknowledge')
-  acknowledgeAlert(@Param('alertId') alertId: string) {
-    return this.robotService.acknowledgeAlert(alertId);
+  acknowledgeAlert(@Request() req, @Param('alertId') alertId: string) {
+    return this.robotService.acknowledgeAlert(alertId, req.user.id);
   }
 
   @Post(':id/patrol')
   createPatrol(
+    @Request() req,
     @Param('id') id: string,
     @Body() dto: CreateScriptPatrolDto,
   ) {
-    return this.robotService.createPatrol(id, dto.name, {
+    return this.robotService.createPatrol(id, req.user.id, dto.name, {
       loop: dto.loop ?? false,
       steps: dto.steps,
     });
@@ -128,14 +129,20 @@ export class RobotController {
 
   @Put(':id/patrols/:patrolId/status')
   updatePatrolStatus(
+    @Request() req,
+    @Param('id') id: string,
     @Param('patrolId') patrolId: string,
     @Body() body: { status: string },
   ) {
-    return this.robotService.updatePatrolStatus(patrolId, body.status);
+    return this.robotService.updatePatrolStatus(id, patrolId, req.user.id, body.status);
   }
 
   @Delete(':id/patrols/:patrolId')
-  deletePatrol(@Param('patrolId') patrolId: string) {
-    return this.robotService.deletePatrol(patrolId);
+  deletePatrol(
+    @Request() req,
+    @Param('id') id: string,
+    @Param('patrolId') patrolId: string,
+  ) {
+    return this.robotService.deletePatrol(id, patrolId, req.user.id);
   }
 }
