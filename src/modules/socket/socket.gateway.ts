@@ -461,6 +461,14 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  // External entry point for MqttIngestService — same wire format as
+  // handleRobotAlert's emit so the PWA's existing `robot:alert` listener picks
+  // it up unchanged. Detection alerts arrive via MQTT (Pi → broker → backend)
+  // instead of Socket.IO, but operator UX must not have to know which path.
+  broadcastDetectionAlert(robotId: string, alert: Record<string, any>): void {
+    this.broadcastToClients(robotId, 'robot:alert', alert);
+  }
+
   getRobotStatus(robotId: string): { connected: boolean; state?: RobotState } {
     return {
       connected: this.connectedRobots.has(robotId),
