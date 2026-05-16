@@ -109,16 +109,27 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
         await this.robotService.startSession(robotId);
 
         this.broadcastToClients(robotId, 'robot:connected', { robotId });
-      } else if (type === 'client' && robotId) {
-        if (!this.connectedClients.has(robotId)) {
-          this.connectedClients.set(robotId, new Set());
+      } else if (type === 'client') {
+        // Always join the per-user room so MqttIngestService can fan out
+        // robot:status:changed to the listing page without needing each row
+        // to hold its own per-robot socket.
+        if (userId) {
+          client.join(`user:${userId}`);
         }
-        this.connectedClients.get(robotId)!.add(client);
-        client.data = { type: 'client', robotId, userId };
+        if (robotId) {
+          if (!this.connectedClients.has(robotId)) {
+            this.connectedClients.set(robotId, new Set());
+          }
+          this.connectedClients.get(robotId)!.add(client);
+          client.data = { type: 'client', robotId, userId };
 
-        const state = this.robotStates.get(robotId);
-        if (state) {
-          client.emit('robot:state', state);
+          const state = this.robotStates.get(robotId);
+          if (state) {
+            client.emit('robot:state', state);
+          }
+        } else {
+          // Dashboard mode: client wants user-scoped events only.
+          client.data = { type: 'client', userId };
         }
       }
     } catch (err) {
@@ -147,7 +158,13 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ):
     | { ok: true; userId?: string }
     | { ok: false; reason: string } {
-    if (!robotId) return { ok: false, reason: 'missing robotId' };
+    // Robots must always declare which serial they own; clients may attach
+    // without a robotId when they just want the user-scoped dashboard channel
+    // (listing page heartbeat fan-out). The per-robot rooms below short-circuit
+    // when robotId is empty.
+    if (type === 'robot' && !robotId) {
+      return { ok: false, reason: 'missing robotId' };
+    }
 
     const auth = (client.handshake.auth ?? {}) as Record<string, unknown>;
     const query = client.handshake.query as Record<string, string | string[]>;
@@ -467,6 +484,36 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // instead of Socket.IO, but operator UX must not have to know which path.
   broadcastDetectionAlert(robotId: string, alert: Record<string, any>): void {
     this.broadcastToClients(robotId, 'robot:alert', alert);
+  }
+
+  // Heartbeat/status/safety bridged from MQTT. Heartbeat fires every 5s, status
+  // every 2s, safety up to 5 Hz — broadcast on each emit so the PWA's safety
+  // panel and online dot stay fresh without browser-side MQTT-over-WS (which
+  // is unreliable behind some corporate proxies).
+  broadcastRobotHeartbeat(
+    robotId: string,
+    heartbeat: Record<string, any>,
+  ): void {
+    this.broadcastToClients(robotId, 'robot:heartbeat', heartbeat);
+  }
+
+  broadcastRobotStatus(robotId: string, status: Record<string, any>): void {
+    this.broadcastToClients(robotId, 'robot:status', status);
+  }
+
+  broadcastRobotSafety(robotId: string, safety: Record<string, any>): void {
+    this.broadcastToClients(robotId, 'robot:safety', safety);
+  }
+
+  // Listing-page channel: per-user room receives terse {robotId, status,
+  // lastSeen, batteryLevel} so the /robots grid can flip ONLINE↔OFFLINE the
+  // moment the broker sees a heartbeat or LWT, without each row holding its
+  // own /robot namespace socket.
+  broadcastUserRobotStatusChanged(
+    userId: string,
+    payload: Record<string, any>,
+  ): void {
+    this.server.to(`user:${userId}`).emit('robot:status:changed', payload);
   }
 
   getRobotStatus(robotId: string): { connected: boolean; state?: RobotState } {
