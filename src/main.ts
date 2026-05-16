@@ -21,7 +21,7 @@ async function bootstrap() {
   // Prefix
   app.setGlobalPrefix('api');
 
-  const port = process.env.PORT || 3002;
+  const port = process.env.PORT || 4000;
   await app.listen(port);
   
   console.log(`🚀 K-Patrol Backend running on http://localhost:${port}`);
