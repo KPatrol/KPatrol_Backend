@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import * as mqtt from 'mqtt';
-import { Prisma, AlertSeverity, AlertType } from '@prisma/client';
+import { Prisma, AlertSeverity, AlertType, RobotStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SocketGateway } from '../socket/socket.gateway';
 
@@ -56,12 +56,31 @@ const KIND_TO_MESSAGE_VI: Record<string, string> = {
   motion: 'Phát hiện chuyển động bất thường',
 };
 
+/**
+ * Per-robot ingest cache. Heartbeat at 5s + status at 2s + safety at 5 Hz would
+ * be ~8 writes/second/robot if we persisted every payload — way more than the
+ * dashboard needs. We persist on transitions (online↔offline, battery delta)
+ * and on a slow heartbeat cadence so `Robot.lastSeen` stays accurate.
+ */
+interface RobotIngestState {
+  userId: string;
+  lastDbHeartbeat: number; // wall-clock ms of last DB write for this robot
+  lastStatus: RobotStatus; // last status we persisted
+  lastBatteryPct: number | null; // last battery we persisted
+}
+
+const HEARTBEAT_DB_WRITE_MS = 10_000; // throttle Robot.lastSeen writes
+const BATTERY_DB_DELTA_PCT = 1.0; // ignore <1% battery jitter
+
 @Injectable()
 export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('MqttIngestService');
   private client: mqtt.MqttClient | null = null;
   private readonly topicPrefix: string;
   private readonly enabled: boolean;
+  // Keyed by robotId — populated on first message per robot. Lets us debounce
+  // DB writes and emit user-scoped `robot:status:changed` only on transitions.
+  private readonly robotState = new Map<string, RobotIngestState>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -118,15 +137,29 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
       connectTimeout: 10_000,
     });
 
-    const topic = `${this.topicPrefix}/+/alert`;
+    // Topics consumed off the broker. `alert` writes a row + broadcasts;
+    // heartbeat/status/safety bridge Pi telemetry into Socket.IO so the PWA
+    // doesn't need its own browser-side MQTT WS client (which is flakey
+    // behind proxies). Heartbeat also doubles as the LWT channel — Pi sets
+    // a retained `{"status":"offline"}` will on this topic.
+    const subscriptions: Array<[string, mqtt.IClientSubscribeOptions]> = [
+      [`${this.topicPrefix}/+/alert`, { qos: 1 }],
+      [`${this.topicPrefix}/+/heartbeat`, { qos: 1 }],
+      [`${this.topicPrefix}/+/status`, { qos: 0 }],
+      [`${this.topicPrefix}/+/safety`, { qos: 0 }],
+    ];
 
     this.client.on('connect', () => {
-      this.logger.log(`MQTT connected — subscribing to ${topic}`);
-      this.client!.subscribe(topic, { qos: 1 }, (err) => {
-        if (err) {
-          this.logger.error(`subscribe ${topic} failed: ${err.message}`);
-        }
-      });
+      this.logger.log(
+        `MQTT connected — subscribing to ${subscriptions.map(([t]) => t).join(', ')}`,
+      );
+      for (const [topic, opts] of subscriptions) {
+        this.client!.subscribe(topic, opts, (err) => {
+          if (err) {
+            this.logger.error(`subscribe ${topic} failed: ${err.message}`);
+          }
+        });
+      }
     });
 
     this.client.on('reconnect', () => {
@@ -145,13 +178,14 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleMessage(topic: string, payload: Buffer): Promise<void> {
-    const serial = this.extractSerial(topic);
-    if (!serial) {
-      this.logger.warn(`ignored message: cannot parse serial from ${topic}`);
+    const parsed = this.parseTopic(topic);
+    if (!parsed) {
+      this.logger.warn(`ignored message: cannot parse topic ${topic}`);
       return;
     }
+    const { serial, suffix } = parsed;
 
-    let body: DetectionAlertPayload;
+    let body: any;
     try {
       body = JSON.parse(payload.toString('utf8'));
     } catch (err) {
@@ -161,7 +195,49 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    if (typeof body?.kind !== 'string' || typeof body?.confidence !== 'number') {
+    // Resolve once per message — heartbeat/safety/status all need {id, userId}
+    // to fan out via Socket.IO rooms.
+    const robot = await this.prisma.robot.findUnique({
+      where: { serialNumber: serial },
+      select: { id: true, userId: true },
+    });
+    if (!robot) {
+      // Unknown robot: don't auto-create — operator may not have registered
+      // it yet. Log so the situation is visible (debounce per-serial would
+      // be nicer but the ack only happens once on startup).
+      this.logger.warn(
+        `ignored ${topic}: robot serial ${serial} not registered`,
+      );
+      return;
+    }
+
+    switch (suffix) {
+      case 'alert':
+        await this.handleAlertMessage(topic, robot, body as DetectionAlertPayload);
+        return;
+      case 'heartbeat':
+        await this.handleHeartbeatMessage(robot, body);
+        return;
+      case 'status':
+        await this.handleStatusMessage(robot, body);
+        return;
+      case 'safety':
+        this.handleSafetyMessage(robot, body);
+        return;
+      default:
+        this.logger.warn(`ignored ${topic}: unknown suffix "${suffix}"`);
+    }
+  }
+
+  private async handleAlertMessage(
+    topic: string,
+    robot: { id: string; userId: string },
+    body: DetectionAlertPayload,
+  ): Promise<void> {
+    if (
+      typeof body?.kind !== 'string' ||
+      typeof body?.confidence !== 'number'
+    ) {
       this.logger.warn(`ignored ${topic}: missing kind/confidence`);
       return;
     }
@@ -169,17 +245,6 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
     const alertType = KIND_TO_ALERT_TYPE[body.kind];
     if (!alertType) {
       this.logger.warn(`ignored ${topic}: unknown kind "${body.kind}"`);
-      return;
-    }
-
-    const robot = await this.prisma.robot.findUnique({
-      where: { serialNumber: serial },
-      select: { id: true, userId: true },
-    });
-    if (!robot) {
-      // Unknown robot: don't auto-create — operator may not have registered
-      // it yet. Log so the situation is visible.
-      this.logger.warn(`ignored ${topic}: robot serial ${serial} not registered`);
       return;
     }
 
@@ -225,7 +290,7 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.logger.log(
-        `alert id=${alert.id} robot=${serial} kind=${body.kind} conf=${body.confidence.toFixed(2)}`,
+        `alert id=${alert.id} robot=${robot.id} kind=${body.kind} conf=${body.confidence.toFixed(2)}`,
       );
 
       // Live push to operator UI. Strip snapshot_b64 from the broadcast — at
@@ -241,12 +306,118 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private extractSerial(topic: string): string | null {
-    // topic = "<prefix>/<serial>/alert"
+  private parseTopic(topic: string): { serial: string; suffix: string } | null {
+    // topic = "<prefix>/<serial>/<suffix>" where suffix ∈ {alert,heartbeat,status,safety}
     const parts = topic.split('/');
     if (parts.length !== 3) return null;
     if (parts[0] !== this.topicPrefix) return null;
-    if (parts[2] !== 'alert') return null;
-    return parts[1] || null;
+    const serial = parts[1];
+    const suffix = parts[2];
+    if (!serial || !suffix) return null;
+    return { serial, suffix };
+  }
+
+  /**
+   * Heartbeat handler. Pi publishes a retained heartbeat every 5s plus a
+   * retained `{"status":"offline"}` LWT on disconnect. We persist transitions
+   * (online↔offline) immediately and throttle online-online refreshes to
+   * `HEARTBEAT_DB_WRITE_MS` so a 5s cadence isn't a write storm at scale.
+   */
+  private async handleHeartbeatMessage(
+    robot: { id: string; userId: string },
+    body: any,
+  ): Promise<void> {
+    const rawStatus = typeof body?.status === 'string' ? body.status : 'online';
+    const newStatus: RobotStatus =
+      rawStatus === 'offline' ? RobotStatus.OFFLINE : RobotStatus.ONLINE;
+    const now = Date.now();
+    const cached = this.robotState.get(robot.id);
+    const statusChanged = !cached || cached.lastStatus !== newStatus;
+    const heartbeatStale =
+      !cached || now - cached.lastDbHeartbeat >= HEARTBEAT_DB_WRITE_MS;
+
+    if (statusChanged || heartbeatStale) {
+      try {
+        await this.prisma.robot.update({
+          where: { id: robot.id },
+          data: { status: newStatus, lastSeen: new Date() },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `heartbeat persist failed for ${robot.id}: ${(err as Error).message}`,
+        );
+      }
+      this.robotState.set(robot.id, {
+        userId: robot.userId,
+        lastDbHeartbeat: now,
+        lastStatus: newStatus,
+        lastBatteryPct: cached?.lastBatteryPct ?? null,
+      });
+    }
+
+    // Always re-broadcast the raw heartbeat so the per-robot view gets the
+    // freshest controller flags (esp32_motor, esp32_encoder, nav_mode, ...).
+    this.socket.broadcastRobotHeartbeat(robot.id, body);
+
+    // Status-changed event drives the /robots listing card without forcing
+    // every row to hold a per-robot socket. Scoped to the owner's user room.
+    if (statusChanged) {
+      this.socket.broadcastUserRobotStatusChanged(robot.userId, {
+        robotId: robot.id,
+        status: newStatus,
+        lastSeen: new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Status handler. Pi pushes connection/battery/speed/light/temperature at
+   * 2 Hz. We re-broadcast every payload (cheap) but only persist battery on
+   * ≥1% change to avoid hammering the DB with single-digit jitter.
+   */
+  private async handleStatusMessage(
+    robot: { id: string; userId: string },
+    body: any,
+  ): Promise<void> {
+    this.socket.broadcastRobotStatus(robot.id, body);
+
+    const battery = typeof body?.battery === 'number' ? body.battery : null;
+    if (battery === null) return;
+
+    const cached = this.robotState.get(robot.id);
+    const prevPct = cached?.lastBatteryPct ?? null;
+    if (prevPct !== null && Math.abs(battery - prevPct) < BATTERY_DB_DELTA_PCT) {
+      return;
+    }
+
+    try {
+      await this.prisma.robot.update({
+        where: { id: robot.id },
+        data: { batteryLevel: battery, lastSeen: new Date() },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `battery persist failed for ${robot.id}: ${(err as Error).message}`,
+      );
+      return;
+    }
+    this.robotState.set(robot.id, {
+      userId: robot.userId,
+      lastDbHeartbeat: cached?.lastDbHeartbeat ?? Date.now(),
+      lastStatus: cached?.lastStatus ?? RobotStatus.ONLINE,
+      lastBatteryPct: battery,
+    });
+  }
+
+  /**
+   * Safety handler. Pi publishes at 5 Hz — too fast for DB writes, so this
+   * is fan-out-only into the robot's Socket.IO room. The safety panel on
+   * the PWA listens for `robot:safety` and renders directly.
+   */
+  private handleSafetyMessage(
+    robot: { id: string; userId: string },
+    body: any,
+  ): void {
+    this.socket.broadcastRobotSafety(robot.id, body);
   }
 }
