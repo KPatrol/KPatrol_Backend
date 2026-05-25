@@ -3,9 +3,75 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateRobotDto, UpdateRobotDto } from './robot.dto';
 import { RobotStatus, AlertType, AlertSeverity, Prisma } from '@prisma/client';
 
+// V5.8: Hot-path ownership cache for the joystick forward endpoint.
+// `forwardCommand` runs at 10-20 Hz; the cold `findOne()` join (10× sessions
+// + 10× patrols + 10× alerts) is wasted work just to confirm the JWT user
+// owns the robot. We keep a small per-process LRU mapping `userId:robotId`
+// → `{serialNumber}` with a 60-second TTL so the steady-state cost of a
+// joystick frame is one in-process Map.get() instead of four PostgreSQL
+// SELECTs. Cache entry size is tiny; capping at ~256 entries comfortably
+// covers any realistic operator count.
+type OwnershipCacheEntry = { serialNumber: string; expiresAt: number };
+const OWNERSHIP_TTL_MS = 60_000;
+const OWNERSHIP_MAX_ENTRIES = 256;
+
 @Injectable()
 export class RobotService {
+  private readonly ownershipCache = new Map<string, OwnershipCacheEntry>();
+
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * Hot-path ownership check used by /robots/:id/forward/:suffix.
+   * Returns the robot's serialNumber (the only field the MQTT publish
+   * needs) and caches the answer for 60 s. The cold {@link findOne}
+   * remains the canonical detail loader; this is purely an optimisation
+   * for the joystick command stream.
+   *
+   * Throws NotFoundException if the robot doesn't exist, ForbiddenException
+   * if it belongs to another user — same contract as findOne, so callers
+   * can swap one for the other.
+   */
+  async findOneForCommand(id: string, userId: string): Promise<{ serialNumber: string }> {
+    const cacheKey = `${userId}:${id}`;
+    const now = Date.now();
+    const hit = this.ownershipCache.get(cacheKey);
+    if (hit && hit.expiresAt > now) {
+      return { serialNumber: hit.serialNumber };
+    }
+    const robot = await this.prisma.robot.findUnique({
+      where: { id },
+      select: { id: true, userId: true, serialNumber: true },
+    });
+    if (!robot) {
+      throw new NotFoundException('Robot not found');
+    }
+    if (robot.userId !== userId) {
+      throw new ForbiddenException('Access denied');
+    }
+    if (this.ownershipCache.size >= OWNERSHIP_MAX_ENTRIES) {
+      // Cheap eviction — drop the oldest insertion order entry. Map keeps
+      // insertion order so the first key from the iterator is fine.
+      const firstKey = this.ownershipCache.keys().next().value;
+      if (firstKey !== undefined) this.ownershipCache.delete(firstKey);
+    }
+    this.ownershipCache.set(cacheKey, {
+      serialNumber: robot.serialNumber,
+      expiresAt: now + OWNERSHIP_TTL_MS,
+    });
+    return { serialNumber: robot.serialNumber };
+  }
+
+  /** Invalidate any cached ownership entry for `robotId` — call from update/
+   *  delete so a transferred or renamed robot doesn't continue accepting
+   *  commands under the previous owner's session. */
+  invalidateOwnershipCache(robotId: string): void {
+    for (const key of this.ownershipCache.keys()) {
+      if (key.endsWith(`:${robotId}`)) {
+        this.ownershipCache.delete(key);
+      }
+    }
+  }
 
   async create(userId: string, dto: CreateRobotDto) {
     try {
@@ -74,6 +140,7 @@ export class RobotService {
 
   async update(id: string, userId: string, dto: UpdateRobotDto) {
     await this.findOne(id, userId); // Check ownership
+    this.invalidateOwnershipCache(id);
 
     return this.prisma.robot.update({
       where: { id },
@@ -83,6 +150,7 @@ export class RobotService {
 
   async remove(id: string, userId: string) {
     await this.findOne(id, userId); // Check ownership
+    this.invalidateOwnershipCache(id);
 
     return this.prisma.robot.delete({
       where: { id },

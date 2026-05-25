@@ -10,6 +10,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { Inject, forwardRef } from '@nestjs/common';
 import { RobotService } from '../robot/robot.service';
 import { RobotStatus } from '@prisma/client';
 import { getAllowedOrigins } from '../../config/cors.config';
@@ -54,6 +55,10 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private lastLimitLogMs = new Map<string, number>();
 
   constructor(
+    // V5.6: RobotModule and SocketModule reach each other via forwardRef
+    // (see socket.module.ts) — @Inject(forwardRef(...)) is required for
+    // Nest to defer the lookup until both modules are fully constructed.
+    @Inject(forwardRef(() => RobotService))
     private robotService: RobotService,
     private jwt: JwtService,
   ) {}
@@ -503,6 +508,27 @@ export class SocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   broadcastRobotSafety(robotId: string, safety: Record<string, any>): void {
     this.broadcastToClients(robotId, 'robot:safety', safety);
+  }
+
+  // Battery telemetry from Pi INA219 sensor; PWA listens on this channel to
+  // refresh battery widget without re-polling REST. Emitted at the same cadence
+  // the Pi publishes (~5s) so we don't need extra throttling here.
+  broadcastRobotBattery(robotId: string, battery: Record<string, any>): void {
+    this.broadcastToClients(robotId, 'robot:battery', battery);
+  }
+
+  // AlarmController on the Pi fires this when a rule's continuous-duration
+  // window elapses. Backend persists the trigger row, then forwards the same
+  // payload so the PWA can toast / log it without a round-trip to REST.
+  broadcastAlarmTrigger(robotId: string, trigger: Record<string, any>): void {
+    this.broadcastToClients(robotId, 'robot:alarm:triggered', trigger);
+  }
+
+  // V5.6: D1 R32 peripheral hub snapshot (relay state, DHT11 temp/humidity,
+  // watchdog, fw, heap). Pi publishes ~every 5s + on change, retained=true,
+  // so a fresh dashboard connection gets the latest snapshot immediately.
+  broadcastRobotPeripherals(robotId: string, snapshot: Record<string, any>): void {
+    this.broadcastToClients(robotId, 'robot:peripherals', snapshot);
   }
 
   // Listing-page channel: per-user room receives terse {robotId, status,

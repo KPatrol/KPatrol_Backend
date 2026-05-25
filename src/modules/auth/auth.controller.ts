@@ -1,4 +1,5 @@
 import { Controller, Post, Body, Get, Delete, UseGuards, Request, HttpCode, HttpStatus, UnauthorizedException } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto, LoginDto } from './auth.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -19,6 +20,10 @@ export class AuthController {
    * Returns the access + refresh token pair so the client can log in immediately
    * without a follow-up `/login` call.
    */
+  // Strict rate limit on register — a public endpoint that always hits the
+  // password hasher (bcrypt is expensive on purpose). Without this an
+  // attacker could DOS the API and run up the DB by spamming /register.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('register')
   async register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
@@ -28,6 +33,7 @@ export class AuthController {
    * Exchange email/password for an access + refresh token pair.
    * Forced to 200 (instead of POST's default 201) because no resource is created.
    */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto) {
@@ -53,6 +59,11 @@ export class AuthController {
    * The previous refresh token is revoked atomically inside AuthService to
    * prevent token reuse across simultaneous refreshes.
    */
+  // Rate limit refresh — a stolen refresh token in the wild could otherwise
+  // be replayed to mint access tokens at line rate. 30/min is well above
+  // what any legitimate client needs (web apps refresh once per access-token
+  // TTL, ~15 min in our config).
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Body() body: { refreshToken: string }) {
