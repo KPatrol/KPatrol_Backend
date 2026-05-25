@@ -34,9 +34,9 @@ model AuthSession {
   expiresAt DateTime
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([expiresAt])  // For expired session cleanup
+  @@index([expiresAt]) // For expired session cleanup
 }
 
 enum Role {
@@ -47,31 +47,33 @@ enum Role {
 // ==================== ROBOT ====================
 
 model Robot {
-  id           String      @id @default(cuid())
-  name         String
-  serialNumber String      @unique
-  status       RobotStatus @default(OFFLINE)
-  userId       String
-  batteryLevel Float?
-  lastSeen     DateTime?
+  id              String      @id @default(cuid())
+  name            String
+  serialNumber    String      @unique
+  status          RobotStatus @default(OFFLINE)
+  userId          String
+  batteryLevel    Float?
+  lastSeen        DateTime?
   // V8: Safety thresholds stored per-robot
-  safetyEnabled        Boolean @default(true)
-  dangerDistance       Int     @default(150)
-  cautionDistance      Int     @default(250)
-  slowDistance         Int     @default(500)
+  safetyEnabled   Boolean     @default(true)
+  dangerDistance  Int         @default(150)
+  cautionDistance Int         @default(250)
+  slowDistance    Int         @default(500)
   // V8: Speed config
-  defaultSpeed         Int     @default(150)
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  defaultSpeed    Int         @default(150)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   // Restrict: deleting a user must not silently destroy owned robots —
   // transfer ownership first.
-  user         User        @relation(fields: [userId], references: [id], onDelete: Restrict)
-  sessions     RobotSession[]
-  patrols      Patrol[]
-  alerts       Alert[]
-  events       RobotEvent[]
-  telemetry    Telemetry[]
+  user          User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions      RobotSession[]
+  patrols       Patrol[]
+  alerts        Alert[]
+  events        RobotEvent[]
+  telemetry     Telemetry[]
+  alarmRules    AlarmRule[]
+  alarmTriggers AlarmTrigger[]
 }
 
 enum RobotStatus {
@@ -88,8 +90,8 @@ model RobotSession {
   endedAt   DateTime?
   distance  Float     @default(0)
 
-  robot     Robot     @relation(fields: [robotId], references: [id], onDelete: Cascade)
-  logs      PatrolLog[]
+  robot Robot       @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  logs  PatrolLog[]
 }
 
 // ==================== PATROL ====================
@@ -103,21 +105,21 @@ model Patrol {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  robot     Robot    @relation(fields: [robotId], references: [id], onDelete: Cascade)
-  logs      PatrolLog[]
+  robot Robot       @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  logs  PatrolLog[]
 }
 
 model PatrolLog {
-  id        String    @id @default(cuid())
+  id        String   @id @default(cuid())
   patrolId  String?
   sessionId String?
   logType   String
   message   String
   data      Json?
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  patrol    Patrol?       @relation(fields: [patrolId], references: [id], onDelete: Cascade)
-  session   RobotSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  patrol  Patrol?       @relation(fields: [patrolId], references: [id], onDelete: Cascade)
+  session RobotSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 }
 
 // ==================== ROBOT EVENTS (Activity History) ====================
@@ -134,7 +136,7 @@ model RobotEvent {
   data        Json?
   createdAt   DateTime @default(now())
 
-  robot       Robot    @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
   @@index([robotId, createdAt])
   @@index([robotId, eventType])
@@ -143,41 +145,41 @@ model RobotEvent {
 // ==================== TELEMETRY ====================
 
 model Telemetry {
-  id           String   @id @default(cuid())
-  robotId      String
-  timestamp    DateTime @default(now())
+  id        String   @id @default(cuid())
+  robotId   String
+  timestamp DateTime @default(now())
 
   batteryLevel Float?
   temperature  Float?
   cpuUsage     Float?
   memoryUsage  Float?
 
-  positionX    Float?
-  positionY    Float?
-  heading      Float?
+  positionX Float?
+  positionY Float?
+  heading   Float?
 
-  speedM1      Float?
-  speedM2      Float?
-  speedM3      Float?
-  speedM4      Float?
+  speedM1 Float?
+  speedM2 Float?
+  speedM3 Float?
+  speedM4 Float?
 
   // V8: ToF distances (mm)
-  tofFront       Float?
-  tofFrontLeft   Float?
-  tofFrontRight  Float?
-  tofLeft        Float?
-  tofRight       Float?
-  tofBack        Float?
+  tofFront      Float?
+  tofFrontLeft  Float?
+  tofFrontRight Float?
+  tofLeft       Float?
+  tofRight      Float?
+  tofBack       Float?
 
   // V8: IMU
-  imuYaw     Float?
-  imuPitch   Float?
-  imuRoll    Float?
+  imuYaw   Float?
+  imuPitch Float?
+  imuRoll  Float?
 
-  robot        Robot    @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
   @@index([robotId, timestamp])
-  @@index([timestamp])  // For cron cleanup by age
+  @@index([timestamp]) // For cron cleanup by age
 }
 
 // ==================== ALERTS ====================
@@ -209,12 +211,12 @@ model Alert {
   externalId     Int?
   createdAt      DateTime      @default(now())
 
-  robot          Robot         @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  robot Robot @relation(fields: [robotId], references: [id], onDelete: Cascade)
 
   @@unique([robotId, externalId])
   @@index([robotId, acknowledged])
-  @@index([acknowledged, createdAt])  // For cron cleanup of old acknowledged alerts
-  @@index([robotId, type, createdAt])  // Web admin filters by alert type per robot
+  @@index([acknowledged, createdAt]) // For cron cleanup of old acknowledged alerts
+  @@index([robotId, type, createdAt]) // Web admin filters by alert type per robot
 }
 
 enum AlertType {
@@ -240,17 +242,91 @@ enum AlertSeverity {
 // ==================== NOTIFICATIONS ====================
 
 model Notification {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   title     String
   message   String
-  type      String   @default("info")
-  read      Boolean  @default(false)
+  type      String    @default("info")
+  read      Boolean   @default(false)
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, read])
   @@index([userId, createdAt])
+}
+
+// ==================== ALARM RULES (V5.5 operator-configured) ====================
+// Each rule maps an event-type (person / fire / battery_low / battery_critical /
+// tipover / schedule / system_error / any_safety) onto a light + buzzer pattern.
+// Rule fires when the event is continuously observed for `continuousDurationS`
+// seconds inside one of the configured `TimeWindow`s (or always when no window
+// is given). After firing, the rule is gated by `cooldownS` to avoid retrigger
+// thrash. The full rule set is pushed to the Pi via MQTT topic
+// `kpatrol/{serial}/alarm/rules` whenever any row changes.
+model AlarmRule {
+  id                  String   @id @default(cuid())
+  robotId             String
+  name                String
+  // EventType lives on the Pi (alarm_controller) — kept as String to allow
+  // future event types without a migration cycle.
+  eventType           String
+  enabled             Boolean  @default(true)
+  // continuous-dwell threshold before firing, default 15s per the operator
+  // requirement; cooldown gates re-fire after pattern dispatch.
+  continuousDurationS Int      @default(15)
+  cooldownS           Int      @default(30)
+  // Firmware light pattern: OFF / WARN_BLINK / WARN_STROBE / BOTH_BLINK / SOS
+  lightPattern        String   @default("WARN_BLINK")
+  // Firmware buzzer pattern: OFF / ON / BEEP / ALARM / SOS
+  buzzerPattern       String   @default("ALARM")
+  // JSON array of { start: "HH:MM", end: "HH:MM", weekdays: [0..6] (Sun..Sat) }
+  // — empty array means "always armed". Stored as JSON because Prisma can't
+  // model dynamic-length window lists without a child table, and most rules
+  // have ≤3 windows so an in-row JSON is the simpler primitive.
+  windows             Json     @default("[]")
+  // V5.15c9: notification dispatch flags. Light/buzzer patterns drive the
+  // robot's local response; these drive *operator-facing* notifications
+  // when the rule fires. Defaults preserve backward compat: rules
+  // created before this column existed still ping the robot owner.
+  //   notifyOwner    — email/Zalo to robot.user. Default ON.
+  //   notifyAdmins   — fan-out to ALERT_RECIPIENTS_EMAIL / ALERT_RECIPIENTS_ZALO
+  //                    environment lists. Default OFF (off-thesis venues).
+  //   notifyEmail    — CSV of extra email addresses, optional.
+  //   notifyZaloIds  — JSON array of Zalo OA user_ids, optional.
+  notifyOwner         Boolean  @default(true)
+  notifyAdmins        Boolean  @default(false)
+  notifyEmail         String?
+  notifyZaloIds       Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  robot    Robot          @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  triggers AlarmTrigger[]
+
+  @@index([robotId, enabled])
+  @@index([robotId, eventType])
+}
+
+// History record persisted from the Pi's MQTT topic
+// `kpatrol/{serial}/alarm/triggered`. ruleId may be null if the rule was
+// deleted between fire and ingest — we still keep the row for forensics.
+model AlarmTrigger {
+  id            String   @id @default(cuid())
+  robotId       String
+  ruleId        String?
+  ruleName      String
+  eventType     String
+  lightPattern  String
+  buzzerPattern String
+  dwellS        Float
+  meta          Json?
+  firedAt       DateTime @default(now())
+
+  robot Robot      @relation(fields: [robotId], references: [id], onDelete: Cascade)
+  rule  AlarmRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+
+  @@index([robotId, firedAt])
+  @@index([ruleId, firedAt])
 }

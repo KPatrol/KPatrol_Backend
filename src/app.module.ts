@@ -11,6 +11,7 @@ import { SocketModule } from './modules/socket/socket.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 import { MqttIngestModule } from './modules/mqtt-ingest/mqtt-ingest.module';
+import { AlarmRuleModule } from './modules/alarm-rule/alarm-rule.module';
 import { SecurityModule } from './modules/security/security.module';
 import { UserThrottlerGuard } from './modules/security/user-throttler.guard';
 import { SecurityHeadersMiddleware } from './modules/security/security-headers.middleware';
@@ -37,6 +38,7 @@ import { HealthController } from './health.controller';
     NotificationModule,
     MaintenanceModule,
     MqttIngestModule,
+    AlarmRuleModule,
     SecurityModule,
   ],
   controllers: [HealthController],
