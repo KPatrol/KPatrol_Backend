@@ -7,11 +7,32 @@ import { NotificationPayload } from './channels/notification-channel.interface';
 
 type Severity = NotificationPayload['severity'];
 
+// V5.15c9: extended dispatch envelope with per-rule recipient knobs.
+// `notifyOwner` defaults true so the existing helper methods (`notifyAlert`,
+// `notifyLowBattery`, `notifyRobotOnline`, …) keep ringing the robot owner
+// without each having to set the flag explicitly. Per-rule alarm dispatch
+// passes it as the AlarmRule.notifyOwner column.
+type DispatchOpts = {
+  title: string;
+  body: string;
+  type: string;
+  broadcastAdmins?: boolean;
+  notifyOwner?: boolean;
+  extraEmails?: string[];
+  extraZaloIds?: string[];
+};
+
 @Injectable()
 export class NotificationService {
   private readonly log = new Logger(NotificationService.name);
   private readonly adminEmails: string[];
   private readonly adminZaloIds: string[];
+  // V5.15c9: if set, EVERY owner-bound email is rewritten to this address
+  // before SMTP send. Display-name in the cockpit UI is unaffected — only
+  // the SMTP RCPT TO. This exists because the thesis demo wants the user
+  // record to read `khoa.vu@kpatrol.online` (branded domain) while the
+  // actual delivery has to go to an MX-resolvable mailbox.
+  private readonly ownerEmailOverride: string;
 
   constructor(
     private prisma: PrismaService,
@@ -25,9 +46,17 @@ export class NotificationService {
     this.adminZaloIds = parseList(
       this.config.get<string>('ALERT_RECIPIENTS_ZALO'),
     );
+    this.ownerEmailOverride = (
+      this.config.get<string>('NOTIFY_OWNER_EMAIL_OVERRIDE') ?? ''
+    ).trim();
     if (this.adminEmails.length || this.adminZaloIds.length) {
       this.log.log(
         `admin broadcast: emails=${this.adminEmails.length} zalo=${this.adminZaloIds.length}`,
+      );
+    }
+    if (this.ownerEmailOverride) {
+      this.log.warn(
+        `owner-email override active → all owner notifications go to ${this.ownerEmailOverride}`,
       );
     }
   }
@@ -132,6 +161,35 @@ export class NotificationService {
     });
   }
 
+  /**
+   * Per-rule alarm dispatch. Unlike `notifyAlert` which always broadcasts to
+   * admins, this honors the four notification toggles stored on the matching
+   * AlarmRule row (`notifyOwner`, `notifyAdmins`, `notifyEmail` CSV,
+   * `notifyZaloIds` JSON). Any rule with all four falsy → DB-only event,
+   * no transport fan-out (still creates the in-app inbox record).
+   */
+  async notifyForAlarmRule(
+    userId: string,
+    alertType: string,
+    message: string,
+    opts: {
+      notifyOwner?: boolean;
+      notifyAdmins?: boolean;
+      extraEmails?: string[];
+      extraZaloIds?: string[];
+    } = {},
+  ) {
+    return this.dispatch(userId, {
+      title: `Alert: ${alertType}`,
+      body: message,
+      type: 'alert',
+      broadcastAdmins: opts.notifyAdmins ?? false,
+      notifyOwner: opts.notifyOwner ?? true,
+      extraEmails: opts.extraEmails ?? [],
+      extraZaloIds: opts.extraZaloIds ?? [],
+    });
+  }
+
   async notifyPatrolComplete(userId: string, patrolName: string) {
     return this.dispatch(userId, {
       title: 'Patrol Complete',
@@ -156,12 +214,7 @@ export class NotificationService {
 
   private async dispatch(
     userId: string,
-    opts: {
-      title: string;
-      body: string;
-      type: string;
-      broadcastAdmins?: boolean;
-    },
+    opts: DispatchOpts,
   ) {
     // Always create the DB record first — UI inbox + audit trail must not
     // depend on transport channels succeeding.
@@ -176,27 +229,43 @@ export class NotificationService {
 
   private async fanOut(
     userId: string,
-    opts: { title: string; body: string; type: string; broadcastAdmins?: boolean },
+    opts: DispatchOpts,
   ) {
     const severity = (opts.type as Severity) ?? 'info';
     const recipients: { kind: 'email' | 'zalo'; to: string }[] = [];
 
     // Owning user — email lookup. (Zalo user_id is not in the User model yet,
     // so per-user Zalo delivery only happens via admin broadcast for now.)
-    try {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { email: true },
-      });
-      if (user?.email) recipients.push({ kind: 'email', to: user.email });
-    } catch (err) {
-      this.log.warn(`user lookup failed for fan-out: ${(err as Error).message}`);
+    // `notifyOwner` defaults true to keep existing helpers (notifyAlert /
+    // notifyLowBattery / notifyRobotOnline) ringing the owner. Per-rule
+    // alarm dispatch passes the flag explicitly.
+    if (opts.notifyOwner !== false) {
+      // Override takes precedence over DB lookup — saves the round-trip
+      // and is the thesis-demo path (branded user.email is unroutable).
+      if (this.ownerEmailOverride) {
+        recipients.push({ kind: 'email', to: this.ownerEmailOverride });
+      } else {
+        try {
+          const user = await this.prisma.user.findUnique({
+            where: { id: userId },
+            select: { email: true },
+          });
+          if (user?.email) recipients.push({ kind: 'email', to: user.email });
+        } catch (err) {
+          this.log.warn(`user lookup failed for fan-out: ${(err as Error).message}`);
+        }
+      }
     }
 
     if (opts.broadcastAdmins) {
       for (const a of this.adminEmails) recipients.push({ kind: 'email', to: a });
       for (const z of this.adminZaloIds) recipients.push({ kind: 'zalo', to: z });
     }
+
+    // Per-rule extras — emails from CSV and Zalo IDs from JSON array stored
+    // on the AlarmRule row. Deduplicated below before send.
+    for (const e of opts.extraEmails ?? []) recipients.push({ kind: 'email', to: e });
+    for (const z of opts.extraZaloIds ?? []) recipients.push({ kind: 'zalo', to: z });
 
     if (!recipients.length) return;
 

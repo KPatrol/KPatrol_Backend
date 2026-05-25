@@ -47,6 +47,11 @@ COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
 COPY --from=builder --chown=nestjs:nodejs /app/prisma ./prisma
+# V5.15c9: bundle K-Patrol logo + branded assets so EmailChannel can attach
+# them inline via CID. Embedded at build time (no runtime fetch) so emails
+# render the brand even when the recipient is offline / has remote images
+# blocked by default.
+COPY --from=builder --chown=nestjs:nodejs /app/assets ./assets
 
 # Switch to non-root user
 USER nestjs
