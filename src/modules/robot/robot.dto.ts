@@ -75,3 +75,20 @@ export class CreateAlertDto {
   @IsOptional()
   data?: Record<string, any>;
 }
+
+
+// V5.15c15 (2026-05-27): operator-defined daily auto-on schedule for
+// the main 12 V lamp. Times are "HH:MM" 24-hour local time strings;
+// the Pi compares its system clock each tick.
+export class UpdateLightScheduleDto {
+  @IsBoolean()
+  enabled: boolean;
+
+  @IsString()
+  @IsOptional()
+  start?: string;
+
+  @IsString()
+  @IsOptional()
+  end?: string;
+}

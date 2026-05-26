@@ -823,6 +823,7 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
     'buzzer',
     'light_pattern',
     'odom_reset',
+    'light_schedule',
   ]);
 
   publishToRobot(

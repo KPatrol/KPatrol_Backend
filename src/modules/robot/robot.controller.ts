@@ -18,7 +18,7 @@ import { JwtService } from '@nestjs/jwt';
 import { RobotService } from './robot.service';
 import { MqttIngestService } from '../mqtt-ingest/mqtt-ingest.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { CreateRobotDto, UpdateRobotDto, UpdateRobotConfigDto } from './robot.dto';
+import { CreateRobotDto, UpdateRobotDto, UpdateRobotConfigDto, UpdateLightScheduleDto } from './robot.dto';
 import { CreateScriptPatrolDto } from './waypoint.dto';
 import { STREAM_TOKEN_TTL_SECONDS } from '../../config/auth.config';
 
@@ -119,6 +119,33 @@ export class RobotController {
     @Body() dto: UpdateRobotConfigDto,
   ) {
     return this.robotService.updateConfig(id, req.user.id, dto);
+  }
+
+  /**
+   * V5.15c15 (2026-05-27): persist + push the daily auto-on schedule for
+   * the main lamp. Fans out via MQTT retained so the Pi receives the
+   * latest schedule immediately on (re)connect — survives reboots
+   * without needing the Pi to query the REST API.
+   */
+  @Put(':id/light-schedule')
+  async updateLightSchedule(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() dto: UpdateLightScheduleDto,
+  ) {
+    const result = await this.robotService.updateLightSchedule(id, req.user.id, dto);
+    this.mqtt.publishToRobot(
+      result.serialNumber,
+      'light_schedule',
+      {
+        enabled: result.enabled,
+        start: result.start,
+        end: result.end,
+        ts: Date.now(),
+      },
+      { qos: 1, retain: true },
+    );
+    return { ok: true, ...result };
   }
 
   @Get(':id/alerts')

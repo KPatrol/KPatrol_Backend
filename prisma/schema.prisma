@@ -61,6 +61,15 @@ model Robot {
   slowDistance    Int         @default(500)
   // V8: Speed config
   defaultSpeed    Int         @default(150)
+  // V5.15c15 (2026-05-27): daily auto-on schedule for the main 12 V lamp
+  // (separate from the alarm relay). Times are "HH:MM" strings in
+  // Asia/Ho_Chi_Minh local time. Pi compares against its system clock
+  // each tick; when current time is inside the window the lamp is
+  // forced ON, outside the window forced OFF. End < Start wraps past
+  // midnight (e.g. 18:00 → 06:00 = night-time light).
+  mainLightScheduleEnabled Boolean @default(false)
+  mainLightScheduleStart   String? // "HH:MM" 24-hour
+  mainLightScheduleEnd     String? // "HH:MM"
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 

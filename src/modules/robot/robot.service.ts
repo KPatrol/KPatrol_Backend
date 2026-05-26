@@ -387,11 +387,56 @@ export class RobotService {
         status: true,
         batteryLevel: true,
         lastSeen: true,
+        mainLightScheduleEnabled: true,
+        mainLightScheduleStart: true,
+        mainLightScheduleEnd: true,
       },
     });
     if (!robot) throw new NotFoundException('Robot not found');
     if (robot.userId !== userId) throw new ForbiddenException('Access denied');
     const { userId: _ownerId, ...safe } = robot;
     return safe;
+  }
+
+  /**
+   * V5.15c15 (2026-05-27): persist the operator-defined daily auto-on
+   * schedule for the main lamp and return the serial so the controller
+   * can fan it out to the Pi via the existing publishToRobot path.
+   * Times come in as "HH:MM" 24-hour strings. Pass null/null with
+   * enabled:false to disable.
+   */
+  async updateLightSchedule(
+    id: string,
+    userId: string,
+    dto: { enabled: boolean; start?: string | null; end?: string | null },
+  ): Promise<{ serialNumber: string; enabled: boolean; start: string | null; end: string | null }> {
+    await this.findOne(id, userId); // ownership + existence
+    const HM_RE = /^\d{2}:\d{2}$/;
+    const start = dto.enabled ? (dto.start ?? null) : null;
+    const end = dto.enabled ? (dto.end ?? null) : null;
+    if (dto.enabled) {
+      if (!start || !HM_RE.test(start)) throw new ForbiddenException('start must be HH:MM');
+      if (!end || !HM_RE.test(end)) throw new ForbiddenException('end must be HH:MM');
+    }
+    const updated = await this.prisma.robot.update({
+      where: { id },
+      data: {
+        mainLightScheduleEnabled: dto.enabled,
+        mainLightScheduleStart: start,
+        mainLightScheduleEnd: end,
+      },
+      select: {
+        serialNumber: true,
+        mainLightScheduleEnabled: true,
+        mainLightScheduleStart: true,
+        mainLightScheduleEnd: true,
+      },
+    });
+    return {
+      serialNumber: updated.serialNumber,
+      enabled: updated.mainLightScheduleEnabled,
+      start: updated.mainLightScheduleStart,
+      end: updated.mainLightScheduleEnd,
+    };
   }
 }
