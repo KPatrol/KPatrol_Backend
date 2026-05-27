@@ -792,6 +792,12 @@ export class MqttIngestService implements OnModuleInit, OnModuleDestroy {
     body: any,
   ): void {
     if (!body || typeof body !== 'object') return;
+    // V5.15c16: log every periph state we receive so the operator can
+    // verify in `docker compose logs backend` whether the Pi → broker
+    // → backend → Socket.IO chain is wedged.
+    this.logger.log(
+      `periph robot=${robot.id} connected=${body.connected} relay=${body.relay} temp=${body.temperature_c}`,
+    );
     this.socket.broadcastRobotPeripherals(robot.id, body);
   }
 
