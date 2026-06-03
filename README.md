@@ -165,7 +165,7 @@ cp .env.example .env
 #   DATABASE_URL=postgresql://kpatrol:kpatrol@localhost:5432/kpatrol
 #   REDIS_URL=redis://localhost:6379
 #   MQTT_URL=mqtt://localhost:1883
-#   MQTT_USERNAME=alphaasimov2024
+#   MQTT_USERNAME=<MQTT_USERNAME>
 #   MQTT_PASSWORD=...
 #   JWT_SECRET=change-me
 #   JWT_EXPIRES_IN=15m
@@ -189,6 +189,26 @@ pnpm dev
 # Production
 pnpm build && pnpm start:prod
 ```
+
+## Testing
+
+Bộ kiểm thử theo mô hình kim tự tháp (xem Báo cáo, Mục 6.2.6 và Bảng 6.6):
+
+```bash
+# Kiểm thử đơn vị (Jest + ts-jest) — services, controllers, guards, middleware
+npm test                 # ~185 ca
+npm run test:cov         # kèm báo cáo độ phủ
+
+# Kiểm thử tích hợp đầu cuối API (Jest + Supertest)
+# Yêu cầu ngăn xếp thật: docker compose up -d  (PostgreSQL, Redis, EMQX)
+npm run test:e2e         # ~36 ca (auth, robots/RBAC, health, notifications)
+```
+
+| Lớp | Công cụ | Phạm vi | Số ca |
+|---|---|---|---|
+| Đơn vị | Jest + ts-jest | auth, robot, alarm-rule, robot-event, notification, maintenance, guard CSRF/throttler, middleware bảo mật, token-bucket rate-limiter | 185 |
+| Tích hợp đầu cuối | Jest + Supertest | luồng đăng nhập/làm mới, CRUD robot + kiểm soát sở hữu (RBAC), probe sức khoẻ, hộp thư thông báo | 36 |
+| Phân tích tĩnh | ESLint + TypeScript strict | toàn bộ `src/` | — |
 
 ### Environment variables
 
